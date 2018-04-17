@@ -19,4 +19,4 @@ Before starting miner the watchdog disables then re-enables video cards and appl
 * Run minerguarddog.vbs as Admin or schedule at user logon with task scheduler, making sure the process will be started as admin
 
 ## Planned Features
-* CPU temperature monitor
+* CPU temperature monitor (using OpenHardwareMonitor)
