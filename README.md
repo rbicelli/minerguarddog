@@ -1,4 +1,4 @@
-# minerguarddog
+# MinerGuardDog
 Miner watchdog for Windows, compatible with [xmr-stak](https://github.com/fireice-uk/xmr-stak) and [cast-xmr](http://www.gandalph3000.com/)
 
 Mining with RX Vegas in Windows could be a PITA. You have always to check if everything is running fine and sometimes cross fingers.
@@ -19,4 +19,4 @@ Before starting miner the watchdog disables then re-enables video cards and appl
 * Run minerguarddog.vbs as Admin or schedule at user logon with task scheduler, making sure the process will be started as admin
 
 ## Planned Features
-* CPU temperature monitor (using OpenHardwareMonitor)
+* GPU temperature monitor, using [OpenHardwareMonitor](http://openhardwaremonitor.org/)

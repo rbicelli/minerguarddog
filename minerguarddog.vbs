@@ -1,9 +1,10 @@
 ' minerguarddog.vbs: XMR Miner Watchdog
 ' (c) 2018 Riccardo Bicelli <r.bicelli@gmail.com>
 ' This Program is Free Software
-' Version 0.9.1
+' Version 0.9.2
 
 ' Initialization
+Const VERSION = "0.9.2"
 Const DEVCON_SLEEP = 2
 Const OVERDRIVENTOOL_FIXED_ARGS = " -consoleonly"
 Const HTTP_TIMEOUT = 2
@@ -104,7 +105,7 @@ timeWaitReboot = ReadIni(IniFile,"global","time_waitreboot", 15)
 timeSleepCycle = ReadIni(IniFile,"global","time_checkinterval", 10)
 '---------------------------------------------------
 
-
+Echo "MinerGuardDog Version " & VERSION, False
 Echo "------------------------------------------------------------", False
 Echo "Watching Miner Program: " & miner_exe, True
 Echo "Monitoring hashrate on URL: " & hashrate_url, True
