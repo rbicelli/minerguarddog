@@ -76,11 +76,11 @@ While n<>-1
 	Else
 		card_count =  ReadIni(IniFile,inisection,"count","1")
 		card_restart =  ReadIni(IniFile,inisection,"restart","False")		
-		ot_profile =  ReadIni(IniFile,inisection,"overdrivent_profile","")		
+		ot_profile =  ReadIni(IniFile,inisection,"overdriventool_profile","")		
 		card_data = detectCardsData(card_name)
 		
 		For m=1 to card_count
-			ot_or = ReadIni(IniFile,inisection,"overdrivent_profile_" & m,"")			
+			ot_or = ReadIni(IniFile,inisection,"overdriventool_profile_" & m,"")			
 			If ot_or <> "" Then
 				ot_overrides = ot_overrides & m & ":" & ot_or & ";"
 			End If			
