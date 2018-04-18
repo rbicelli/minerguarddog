@@ -5,19 +5,28 @@
 
 ' Initialization
 Const DEVCON_SLEEP = 2
-Const overdriventool_fixed_args = " -consoleonly"
+Const OVERDRIVENTOOL_FIXED_ARGS = " -consoleonly"
 Const HTTP_TIMEOUT = 2
 Const HTTP_ATTEMPTS = 3
+
+'Card Array Position
+Const P_CARD_NAME = 0
+Const P_CARD_COUNT = 1
+Const P_CARD_RESTART = 2
+Const P_CARD_PNPID = 3
+Const P_CARD_INDEXES = 4
+Const P_CARD_OTPROFILE = 5
+Const P_OT_OVERRIDES = 6
 
 Dim timeWaitStart
 Dim timeWaitReboot
 Dim timeWaitMinerStart
 Dim timeSleepCycle
 
-ReDim cards(0)
-ReDim cardIDs(0)
+Set objWMIService = GetObject("winmgmts:\\.\root\cimv2")
 
 forceCScriptExecution
+CheckForOtherInstances
 
 scriptdir = replace(WScript.ScriptFullName,WScript.ScriptName,"")
 
@@ -27,39 +36,58 @@ Set WshShell = CreateObject("WScript.Shell")
 WshShell.CurrentDirectory = scriptdir
 
 Set fso = CreateObject("Scripting.FileSystemObject")
-Set objWMIService = GetObject("winmgmts:\\.\root\cimv2")
 
 '---------------------------------------------------
 ' Load Configuration
 '---------------------------------------------------
 
+'Miner section
+miner_section = ReadIni(IniFile,"global","miner","")
+
+If miner_section = "" Then
+	miner_section = "miner"
+Else
+	miner_section = "miner." & miner_section
+End If
+
 'Hashrate Treshold
-hashrate_min = Int(ReadIni(IniFile,"miner","hashrate_treshold",0))
+hashrate_min = Int(ReadIni(IniFile,miner_section,"hashrate_treshold",0))
 
 'Miner Executable
-miner_dir = ReadIni(IniFile,"miner","directory","")
-miner_exe = ReadIni(IniFile,"miner","executable","")
-miner_args = ReadIni(IniFile,"miner","args","")
+miner_dir = ReadIni(IniFile,miner_section,"directory","")
+miner_exe = ReadIni(IniFile,miner_section,"executable","")
+miner_args = ReadIni(IniFile,miner_section,"args","")
 
 'URL for hashrate check, please check your port configuration in xmr-stak
-hashrate_url = ReadIni(IniFile,"miner","url","")
-hashrate_checktype = ReadIni(IniFile,"miner","check_type","")
+hashrate_url = ReadIni(IniFile,miner_section,"url","")
+hashrate_checktype = ReadIni(IniFile,miner_section,"check_type","")
 
 'Log File, relative to script directory
 logfile = ReadIni(IniFile,"global","logfile","minerguarddog.log")
 
 n = 1
 While n<>-1
-	card_name = ReadIni(IniFile,"videocards","card_" & n & "_name","")
+	inisection = "videocard_" & n 
+	card_name = ReadIni(IniFile,inisection,"name","")
+	ot_overrides = ""
 	If card_name = "" Then
 		n = -1
 	Else
-		card_count =  ReadIni(IniFile,"videocards","card_" & n & "_count","1")
-		card_restart =  ReadIni(IniFile,"videocards","card_" & n & "_restart","False")
-		card_id =  ReadIni(IniFile,"videocards","card_" & n & "_pci_vendor","")
+		card_count =  ReadIni(IniFile,inisection,"count","1")
+		card_restart =  ReadIni(IniFile,inisection,"restart","False")		
+		ot_profile =  ReadIni(IniFile,inisection,"overdrivent_profile","")		
+		card_data = detectCardsData(card_name)
 		
-		Redim preserve cards(n-1)
-		cards(n-1) = card_name & "|" & card_count & "|" & card_restart & "|" & card_id				
+		For m=1 to card_count
+			ot_or = ReadIni(IniFile,inisection,"overdrivent_profile_" & m,"")			
+			If ot_or <> "" Then
+				ot_overrides = ot_overrides & m & ":" & ot_or & ";"
+			End If			
+		Next		
+		If ot_overrides <> "" Then ot_overrides = left(ot_overrides,len(ot_overrides)-1)
+		
+		Redim Preserve cards(n-1)		
+		cards(n-1) = card_name & "|" & card_count & "|" & card_restart & "|" & card_data & "|" & ot_profile & "|" & ot_overrides
 		
 		n=n+1
 	End If
@@ -68,9 +96,6 @@ Wend
 'Paths
 devcon_dir = ReadIni(IniFile,"paths","devcon_dir",scriptdir)
 overdriventool_dir = ReadIni(IniFile,"paths","doverdriventool_dir",scriptdir)
-
-'Overdriventool Command line
-overdriventool_cmd = ReadIni(IniFile,"videocards","overdriventool_args","")
 
 'Global Settings
 timeWaitStart = ReadIni(IniFile,"global","time_waitminerstart", 15)
@@ -87,10 +112,14 @@ Echo "Hashrate threshold set to: " & hashrate_min & " H/s", True
 Echo "Logging to file: " & logfile, True
 Echo "------------------------------------------------------------", False
 
-For n=0 to ubound(cards)
-	c = split(cards(n),"|")
-	Echo "Monitoring video card: " & c(0) & ", " & c(1) & "x (" & c(3) & ")", True
-Next
+If isArray(cards) Then
+	For n=0 to ubound(cards)
+		c = split(cards(n),"|")
+		Echo "Monitoring video card: " & c(P_CARD_NAME) & ", " & c(P_CARD_COUNT) & "x (" & c(P_CARD_PNPID) & ")", True
+	Next
+Else
+	Echo "No video card defined. Monitoring Disabled", True
+End If
 
 If ValidateConfig=False Then Wscript.Quit
 
@@ -103,16 +132,18 @@ Echo "Starting Watchdog ...", True
 Do While True
 		
 	'Check Number of Cards
-	For n=0 to ubound(cards)
-		c = split(cards(n),"|")
-		nc = detectNumberOfCards(c(0)) 
-		If nc <> int(c(1)) Then
-			Echo "Number of video cards mismatch (" & c(0) & ":" & nc & "/" & c(1) & "). Rebooting system in " &  timeWaitReboot & " seconds.", True
-			RebootSystem timeWaitReboot		
-		Else
-			Echo "Number of video cards is OK (" & c(0) & ": " & nc & "/" & c(1) & ")",False
-		End If
-	Next
+	If isArray(cards) Then
+		For n=0 to ubound(cards)
+			c = split(cards(n),"|")
+			nc = detectNumberOfCards(c(0)) 
+			If nc <> int(c(P_CARD_COUNT)) Then
+				Echo "Number of video cards mismatch (" & c(P_CARD_NAME) & ":" & nc & "/" & c(P_CARD_COUNT) & "). Rebooting system in " &  timeWaitReboot & " seconds.", True
+				RebootSystem timeWaitReboot		
+			Else
+				Echo "Number of video cards is OK (" & c(P_CARD_NAME) & ": " & nc & "/" & c(P_CARD_COUNT) & ")",False
+			End If
+		Next
+	End If
 	
 	'Check Miner
 	If checkProcess(miner_exe)=False Then
@@ -141,7 +172,7 @@ Do While True
 					RebootSystem timeWaitReboot
 				End If			
 		Else			
-			Echo "Hashrate is normal (" & hashrate & ")", False
+			Echo "Hashrate is normal (" & hashrate & "/" & hashrate_min & ")", False
 		End If
 	End If
 
@@ -221,6 +252,32 @@ On Error Resume Next
 	detectNumberOfCards=NumOfCards
 End Function
 
+Function detectCardsData(strName)
+On Error Resume Next	
+	ci = 0
+	card_indexes = ""
+	pnp_id = ""
+	Set colItems = objWMIService.ExecQuery ("Select * from Win32_VideoController")
+	For Each objItem in colItems		
+		If lcase(objItem.Name)=lcase(strname) Then			
+			'Add Index
+			card_indexes = card_indexes & ci & ","
+			If pnp_id="" Then
+				'Detect PNP ID for Devcon
+				pnp_id = objItem.PNPDeviceID				
+				p1 = instr(1,pnp_id,"&")
+				p2 = instr(p1+1,pnp_id,"&")								
+				pnp_id = left(pnp_id,p2-1)
+			End If
+		End If
+		ci = ci + 1
+	Next
+	If card_indexes<>"" then 
+		card_indexes = left(card_indexes,len(card_indexes)-1)
+		detectCardsData = pnp_id & "|" & card_indexes
+	End If
+End Function
+
 Sub writeLog(stringa)
 	fso.OpenTextFile(scriptdir & "\" & logfile, 8, True).WriteLine Now & ": " & stringa
 End Sub
@@ -252,6 +309,20 @@ Sub forceCScriptExecution
             """ " & Str
         WScript.Quit
     End If
+End Sub
+
+Sub CheckForOtherInstances
+n=0
+Set colProcess = objWMIService.ExecQuery("Select * From Win32_Process where name = 'cscript.exe'") 
+For Each objProcess In colProcess	
+    If trim(lcase(replace(objProcess.CommandLine,"cscript",""))) = trim(lcase(Wscript.ScriptName)) Then		
+		n = n+1
+	End If
+Next
+If n>1 Then
+	Echo "Another Instance of script is already running. Quitting", False
+	Wscript.Quit
+End If
 End Sub
 
 Sub Sleep(Seconds)
@@ -304,25 +375,50 @@ Function checkProcess(procName)
 	Next
 End Function
 
-Sub startMiner()			
-	Echo "Restarting Cards", True
-	For n=0 To ubound(cards)			
-		c = split(cards(n),"|")			
-		If sBool(c(2))=True Then
-			pci_id = c(3)
-			Echo "Disabling " & c(0) & ": " & pci_id, False	
-			WshShell.Run devcon_dir & "\DEVCON.EXE disable """ & pci_id & """", 0,True
-			Sleep DEVCON_SLEEP
-			Echo "Enabling " & c(0) & ": " & pci_id, False
-			WshShell.Run devcon_dir & "\DEVCON.EXE enable """ & pci_id & """", 0,True
-		End If
-	Next
-	Echo "Waiting Devices to settle", False
-	Sleep DEVCON_SLEEP	
+Sub startMiner()
+	overdriventool_cmd = ""
 	
-	If overdriventool_cmd<>"" Then
-		Echo "Applying Overdriventool Profiles", True
-		WshShell.Run overdriventool_dir & "\OVERDRIVENTOOL.EXE " & overdriventool_cmd & overdriventool_fixed_args, 0, True
+	If isArray(cards) Then
+		'Restart Cards with Devcon
+		Echo "Restarting Cards", True
+		For n=0 To ubound(cards)			
+			c = split(cards(n),"|")			
+			If sBool(c(P_CARD_RESTART))=True Then			
+				Echo "Disabling " & c(P_CARD_NAME) & ": " & c(P_CARD_PNPID), False	
+				WshShell.Run devcon_dir & "\DEVCON.EXE disable """ & c(P_CARD_PNPID) & """", 0,True
+				Sleep DEVCON_SLEEP
+				Echo "Enabling " & c(P_CARD_NAME) & ": " & c(P_CARD_PNPID), False
+				WshShell.Run devcon_dir & "\DEVCON.EXE enable """ & c(P_CARD_PNPID) & """", 0,True
+			End If
+		Next
+		Echo "Waiting Devices to settle", False
+		Sleep DEVCON_SLEEP		
+	
+		'Build Overdriventool Command Line
+		For n=0 to ubound(cards)
+			c = split(cards(n),"|")
+			If c(P_CARD_OTPROFILE) <> "" Then
+				idx = split(c(P_CARD_INDEXES),",")			
+				ot_or = split(c(P_OT_OVERRIDES),";")			
+				For m=0 to ubound(idx)
+					card_profile =  c(P_CARD_OTPROFILE)
+					For p=0 to ubound(ot_or)
+						ot_ori = split(ot_or(p),":")					
+						If ot_ori(0) = idx(m) Then
+							card_profile = ot_ori(1)
+						End If
+					Next
+					overdriventool_cmd = overdriventool_cmd & " -p" & idx(m) & card_profile				
+				Next
+			End If		
+		Next
+	
+		If overdriventool_cmd<>"" Then
+			Echo "Applying Overdriventool Profiles", True
+			Echo "Executing Command " & overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, False
+			WshShell.Run overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, 0, True
+		End If
+	
 	End If
 	
 	prevdir = wshShell.CurrentDirectory
@@ -331,6 +427,7 @@ Sub startMiner()
 	wshShell.CurrentDirectory = prevdir
 	Echo "Miner Started", True
 	Sleep timeWaitMinerStart
+
 End Sub
 
 Function ReadIni( myFilePath, mySection, myKey, myDefault )
@@ -444,7 +541,7 @@ Function validateConfig()
 	
 	'Warnings
 	If hashrate_min<=0 Then
-			Echo "Warning: Minimum Hashrate threshold in invalid. Hashrate threshold check is disabled", True
+		Echo "Warning: Minimum Hashrate threshold in invalid. Hashrate threshold check is disabled", True
 	End If	
 	
 End Function
