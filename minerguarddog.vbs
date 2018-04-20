@@ -225,7 +225,7 @@ Do While True
 				Next
 				If Temp_OK Then
 					ts = join(Temps,",")
-					Echo "Temperatures of video card " & card(P_CARD_NAME) &" are OK (" & right(ts,len(ts)-1) & ")", True
+					Echo "Temperatures of video card " & card(P_CARD_NAME) &" are OK (" & right(ts,len(ts)-1) & ")", False
 					If miner_paused = True Then
 						If timeoutExpired(date_minerpaused,timeout_templimit) Then
 							Echo "Resuming Miner", False
