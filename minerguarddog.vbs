@@ -90,6 +90,7 @@ While n<>-1
 		card_count =  ReadIni(IniFile,inisection,"count","1")
 		card_restart =  ReadIni(IniFile,inisection,"restart","False")		
 		ot_profile =  ReadIni(IniFile,inisection,"overdriventool_profile","")
+		ot_card_indexes = ReadIni(IniFile,inisection,"overdriventool_card_indexes","")
 		temp_limit =  ReadIni(IniFile,inisection,"temp_limit","90")		
 		card_data = detectCardsData(card_name)
 		
@@ -126,7 +127,7 @@ While n<>-1
 		ot_overrides_t = stripLastChar(ot_overrides_t)
 		
 		Redim Preserve cards(n-1)		
-		cards(n-1) = card_name & "|" & card_count & "|" & card_restart & "|" & card_data & "|" & ot_profile & "|" & ot_overrides & "|" & ot_profile_t & "|" & ot_overrides_t & "|" & temp_limit & "|"
+		cards(n-1) = card_name & "|" & card_count & "|" & card_restart & "|" & card_data & "|" & ot_card_indexes & "|" & ot_profile & "|" & ot_overrides & "|" & ot_profile_t & "|" & ot_overrides_t & "|" & temp_limit & "|"
 		
 		n=n+1
 	End If
@@ -143,7 +144,7 @@ overdriventool_dir = ReadIni(IniFile,"paths","overdriventool_dir",scriptdir)
 openhardwaremonitor_dir = ReadIni(IniFile,"tempmonitor","openhardwaremonitor_dir",scriptdir & "openhardwaremonitor")
 
 'Global Settings
-timeWaitStart = ReadIni(IniFile,"global","time_waitminerstart", 15)
+timeWaitStart = ReadIni(IniFile,"global","time_waitstart", 15)
 timeWaitMinerStart = ReadIni(IniFile,"global","time_waitminerstart", 60)
 timeWaitReboot = ReadIni(IniFile,"global","time_waitreboot", 15)
 timeSleepCycle = ReadIni(IniFile,"global","time_checkinterval", 10)
@@ -182,28 +183,33 @@ date_minerstarted = Now
 
 Do While True		
 	'Check Cards
+	Dim card
+	Dim i,nc,m
+	Dim Cards_OK, Temp_OK	
+	
 	Cards_OK = True
+	
 	If isArray(cards) Then
-		For n=0 to ubound(cards)
-			c = split(cards(n),"|")
+		For i=0 to ubound(cards)
+			card = split(cards(i),"|")				
 			'Check Number of Cards
-			nc = detectNumberOfCards(c(P_CARD_NAME)) 
-			If nc <> int(c(P_CARD_COUNT)) Then
-				Echo "Number of video cards mismatch (" & c(P_CARD_NAME) & ":" & nc & "/" & c(P_CARD_COUNT) & "). Rebooting system in " &  timeWaitReboot & " seconds.", True
+			nc = detectNumberOfCards(card(P_CARD_NAME)) 
+			If nc <> int(card(P_CARD_COUNT)) Then
+				Echo "Number of video cards mismatch (" & card(P_CARD_NAME) & ":" & nc & "/" & card(P_CARD_COUNT) & "). Rebooting system in " &  timeWaitReboot & " seconds.", True
 				RebootSystem timeWaitReboot		
 			Else
-				Echo "Number of video cards is OK (" & c(P_CARD_NAME) & ": " & nc & "/" & c(P_CARD_COUNT) & ")",False
+				Echo "Number of video cards is OK (" & card(P_CARD_NAME) & ": " & nc & "/" & card(P_CARD_COUNT) & ")",False
 			End If
 			
 			'Temperature Check			
 			If tempmonitor_enable Then
 				checkOpenhardwaremonitor
 				Temps = getUrl(openhardwaremonitor_url)
-				Temps = cardTemperatures(Temps,c(P_CARD_NAME),c(P_CARD_COUNT))
+				Temps = cardTemperatures(Temps,card(P_CARD_NAME),card(P_CARD_COUNT))
 				Temp_OK = True		
 				For m=0 To ubound(Temps)					
-					If int(Temps(m)) > int(c(P_CARD_TEMP_LIMIT)) Then
-						Echo "Card " &  c(P_CARD_NAME) & ":" & m & " Temperature is over limit " & Temps(m) & "/" & c(P_CARD_TEMP_LIMIT) , True
+					If int(Temps(m)) > int(card(P_CARD_TEMP_LIMIT)) Then
+						Echo "Card " &  card(P_CARD_NAME) & ":" & m & " Temperature is over limit " & Temps(m) & "/" & card(P_CARD_TEMP_LIMIT) , True
 						Temp_OK = False						
 						Select Case temp_fail_action
 							case "pause-miner"
@@ -213,14 +219,13 @@ Do While True
 							case "reboot"								
 								rebootSystem
 							case "shutdown"
-								shutdownSystem
-								
+								shutdownSystem								
 						End Select					
 					End If
 				Next
 				If Temp_OK Then
 					ts = join(Temps,",")
-					Echo "Temperatures of video card " & c(P_CARD_NAME) &" are OK (" & right(ts,len(ts)-1) & ")", True
+					Echo "Temperatures of video card " & card(P_CARD_NAME) &" are OK (" & right(ts,len(ts)-1) & ")", True
 					If miner_paused = True Then
 						If timeoutExpired(date_minerpaused,timeout_templimit) Then
 							Echo "Resuming Miner", False
@@ -229,8 +234,7 @@ Do While True
 					End If
 				End If
 			End If
-		Next
-		
+		Next		
 	End If
 	
 	'Check Miner
@@ -280,11 +284,14 @@ Loop
 '---------------- FUNCTION LIBRARY ----------------
 
 Function getHashrate (url)		
-	response =	getUrl(url)			
-	
+	On Error Resume Next
+	Dim hashrate,response
+	Dim p1,p2,stringa
+	hashrate=""
+	response =	getUrl(url)					
 	If response <> "" Then	
 		Select Case hashrate_checktype
-			Case "xmr-stak"
+			Case "xmr-stak"				
 				p1 = instr(1,response,"<tr><th>Totals:</th>")
 				p2 = instr(p1,response,"</tr><tr>")
 				stringa = Mid(response,p1+20,p2-p1-20)
@@ -379,7 +386,7 @@ On Error Resume Next
 	Next
 	If card_indexes<>"" then 
 		card_indexes = stripLastChar(card_indexes)
-		detectCardsData = pnp_id & "|" & card_indexes
+		detectCardsData = pnp_id '& "|" & card_indexes
 	End If
 End Function
 
@@ -794,4 +801,24 @@ Function inArray(needle,haystack)
 	For n=0 to ubound(haystack)
 		if haystack(n)=needle Then inArray = True
 	Next	
+End Function
+
+Function stringIsAplhaFirst(string1,string2)
+	'Alphabetical sorting with number last
+	bRet = True
+	sAlpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
+	If len(string1)>len(string2) Then
+		sl = len(string2)
+	Else
+		sl = len(string1)
+	End If
+	For i=1 to sl
+		c1 = ucase(mid(string1,i,1))
+		c2 = ucase(mid(string2,i,1))	
+		If instr(sAlpha,c1)>instr(sAlpha,c2) Then
+			bRet = False
+			Exit For
+		End If	
+	Next
+strSort=bREt
 End Function
