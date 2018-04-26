@@ -1,9 +1,9 @@
 ' minerguarddog.vbs: XMR Miner Watchdog
 ' (c) 2018 Riccardo Bicelli <r.bicelli@gmail.com>
 ' This Program is Free Software
-' Version 0.9.2
 
-Const VERSION = "0.9.2"
+Const VERSION = "0.9.3"
+
 ' Initialization
 Const DEVCON_SLEEP = 2
 Const OVERDRIVENTOOL_FIXED_ARGS = " -consoleonly"
@@ -22,144 +22,55 @@ Const P_CARD_OTPROFILE_T = 7
 Const P_CARD_OTOVERRIDES_T = 8
 Const P_CARD_TEMP_LIMIT = 9
 
+' Timings
+Dim timeWaitStart, timeWaitReboot, timeWaitMinerStart, timeSleepCycle
 
-Dim timeWaitStart
-Dim timeWaitReboot
-Dim timeWaitMinerStart
-Dim timeSleepCycle
+'Ini File Variables
+Dim IniFile
+Dim logfile
 
-Dim prev_sharesaccepted
-Dim date_shareacceptedchange
+'Miner
+Dim miner_section
+Dim hashrate_min
+Dim miner_dir, miner_exe, miner_args
+Dim hashrate_url, hashrate_checktype, hashrate_checkvalue
 
-Dim miner_paused
-Dim date_minerstarted
-Dim date_minerpaused
+'Temp Monitor 
+Dim tempmonitor_enable, openhardwaremonitor_url, temp_fail_action
 
+'Paths
+Dim	devcon_dir, overdriventool_dir, openhardwaremonitor_dir
+
+'Timeouts
+Dim timeout_shareacceptedchange, timeout_templimit
+
+Dim scriptdir
+Dim gWshShell
+
+Dim cards()
 ReDim appliedTimedProfiles(0)
 
-Set objWMIService = GetObject("winmgmts:\\.\root\cimv2")
-
 forceCScriptExecution
-CheckForOtherInstances
 
 scriptdir = replace(WScript.ScriptFullName,WScript.ScriptName,"")
 
 IniFile = scriptdir & "minerguarddog.ini"
 
-Set WshShell = CreateObject("WScript.Shell")
-WshShell.CurrentDirectory = scriptdir
+Set gWshShell = CreateObject("WScript.Shell")
+gWshShell.CurrentDirectory = scriptdir
 
-Set fso = CreateObject("Scripting.FileSystemObject")
-
-'---------------------------------------------------
-' Load Configuration
-'---------------------------------------------------
-
-'Miner section
-miner_section = ReadIni(IniFile,"global","miner","")
-
-If miner_section = "" Then
-	miner_section = "miner"
-Else
-	miner_section = "miner." & miner_section
-End If
-
-'Hashrate Treshold
-hashrate_min = Int(ReadIni(IniFile,miner_section,"hashrate_treshold",0))
-
-'Miner Executable
-miner_dir = ReadIni(IniFile,miner_section,"directory","")
-miner_exe = ReadIni(IniFile,miner_section,"executable","")
-miner_args = ReadIni(IniFile,miner_section,"args","")
-
-'URL for hashrate check, please check your port configuration in xmr-stak
-hashrate_url = ReadIni(IniFile,miner_section,"url","")
-hashrate_checktype = ReadIni(IniFile,miner_section,"check_type","")
-
-'Log File, relative to script directory
-logfile = ReadIni(IniFile,"global","logfile","minerguarddog.log")
-
-n = 1
-While n<>-1
-	inisection = "videocard_" & n 
-	card_name = ReadIni(IniFile,inisection,"name","")
-	ot_overrides = ""
-	If card_name = "" Then
-		n = -1
-	Else
-		card_count =  ReadIni(IniFile,inisection,"count","1")
-		card_restart =  ReadIni(IniFile,inisection,"restart","False")		
-		ot_profile =  ReadIni(IniFile,inisection,"overdriventool_profile","")
-		ot_card_indexes = ReadIni(IniFile,inisection,"overdriventool_card_indexes","")
-		temp_limit =  ReadIni(IniFile,inisection,"temp_limit","90")		
-		card_data = detectCardsData(card_name)
-		
-		For m=1 to card_count
-			ot_or = ReadIni(IniFile,inisection,"overdriventool_profile_" & m,"")			
-			If ot_or <> "" Then
-				ot_overrides = ot_overrides & m & ":" & ot_or & ";"
-			End If			
-		Next						
-		ot_overrides = stripLastChar(ot_overrides)
-		
-		'Load Timed Profiles From INI
-		p=1
-		ot_profile_t=""
-		ot_overrides_t=""
-		While p<>-1			
-			stringa = ReadIni(IniFile,inisection,"overdriventool_profile_t" & p ,"")			
-			If stringa<>"" Then
-				Echo "Reading profiles",False
-				ot_startafter = ReadIni(IniFile,inisection,"overdriventool_profile_t" & p & "_after",60)
-				ot_profile_t = ot_profile_t & p & ":" & stringa & ":" & ot_startafter & ";"													
-				For m=1 to card_count
-					ot_or = ReadIni(IniFile,inisection,"overdriventool_profile_t" & p & "_" & m,"")			
-					If ot_or <> "" Then						
-						ot_overrides_t = ot_overrides_t & p & ":" & m & ":" & ot_or & ";"
-					End If			
-				Next
-				p=p+1
-			Else
-				p=-1
-			End If
-		Wend
-		ot_profile_t = stripLastChar(ot_profile_t)
-		ot_overrides_t = stripLastChar(ot_overrides_t)
-		
-		Redim Preserve cards(n-1)		
-		cards(n-1) = card_name & "|" & card_count & "|" & card_restart & "|" & card_data & "|" & ot_card_indexes & "|" & ot_profile & "|" & ot_overrides & "|" & ot_profile_t & "|" & ot_overrides_t & "|" & temp_limit & "|"
-		
-		n=n+1
-	End If
-Wend
-
-'Temperature Monitoring
-tempmonitor_enable = Sbool(ReadIni(IniFile,"tempmonitor","enable",false))
-openhardwaremonitor_url = ReadIni(IniFile,"tempmonitor","url","")
-temp_fail_action = ReadIni(IniFile,"tempmonitor","temp_fail_action","pause-miner")
-
-'Paths
-devcon_dir = ReadIni(IniFile,"paths","devcon_dir",scriptdir)
-overdriventool_dir = ReadIni(IniFile,"paths","overdriventool_dir",scriptdir)
-openhardwaremonitor_dir = ReadIni(IniFile,"tempmonitor","openhardwaremonitor_dir",scriptdir & "openhardwaremonitor")
-
-'Global Settings
-timeWaitStart = ReadIni(IniFile,"global","time_waitstart", 15)
-timeWaitMinerStart = ReadIni(IniFile,"global","time_waitminerstart", 60)
-timeWaitReboot = ReadIni(IniFile,"global","time_waitreboot", 15)
-timeSleepCycle = ReadIni(IniFile,"global","time_checkinterval", 10)
-
-timeout_shareacceptedchange = Int(ReadIni(IniFile,"global","timeout_shareacceptedchange", 180))
-timeout_templimit = Int(ReadIni(IniFile,"global","timeout_templimit", 180))
-'---------------------------------------------------
+' Read Configuration from INI File
+ReadConfig
 
 Echo "MinerGuardDog Version " & VERSION, True
+
+If ValidateConfig=False Then Wscript.Quit
+
 Echo "------------------------------------------------------------", False
 Echo "Watching Miner Program: " & miner_exe, True
 Echo "Monitoring hashrate on URL: " & hashrate_url, True
 Echo "Hashrate threshold set to: " & hashrate_min & " H/s", True
 Echo "Logging to file: " & logfile, True
-Echo "------------------------------------------------------------", False
 
 If isArray(cards) Then
 	For n=0 to ubound(cards)
@@ -170,9 +81,10 @@ Else
 	Echo "No video card defined. Monitoring Disabled", True
 End If
 
-If ValidateConfig=False Then Wscript.Quit
+Echo "------------------------------------------------------------", False
 
-Echo "Waiting " & timeWaitStart & " Seconds before starting watchdog", False
+'Grace period for stopping watchdog (in case of bootloop caused by a malfunction or misconfiguration)
+Echo "Waiting " & timeWaitStart & " seconds before starting watchdog", False
 
 Sleep timeWaitStart
 
@@ -181,12 +93,19 @@ Echo "Starting Watchdog ...", True
 miner_paused = False
 date_minerstarted = Now
 
-Do While True		
+' Main Loop
+Dim card
+Dim i,nc,m
+Dim Cards_OK, Temp_OK
+Dim Counter_MinerRestart, Counter_MinerPaused, Counter_SystemReboot, Counter_TempFail
+Dim prev_sharesaccepted
+Dim date_shareacceptedchange
+Dim miner_paused
+Dim date_minerstarted
+Dim date_minerpaused
+
+Do While True
 	'Check Cards
-	Dim card
-	Dim i,nc,m
-	Dim Cards_OK, Temp_OK	
-	
 	Cards_OK = True
 	
 	If isArray(cards) Then
@@ -214,6 +133,7 @@ Do While True
 						Select Case temp_fail_action
 							case "pause-miner"
 								Echo "Pausing Miner for " & timeout_templimit & " seconds", True
+								Counter_MinerPaused = Counter_MinerPaused + 1
 								miner_paused = True
 								date_minerpaused = Now
 							case "reboot"								
@@ -243,6 +163,7 @@ Do While True
 			Echo "Miner process is not running or not responding, Restarting Miner", True
 			If killMiner(miner_exe)=True Then 
 				startMiner 
+				Counter_MinerRestart = Counter_MinerRestart + 1
 			Else 
 				Echo "Unable to kill miner, rebooting", True
 				rebootSystem timeWaitReboot
@@ -264,7 +185,11 @@ Do While True
 
 	If miner_paused=False And hashrate <> "" And hashrate_min > 0 Then
 		If (hashrate < hashrate_min) then			
-				Echo "Hashrate drop detected (" & hashrate & ")", True
+				If hashrate = -1 Then
+					Echo "Miner seems crashed", False
+				Else
+					Echo "Hashrate drop detected (" & hashrate & ")", True
+				End If
 				Echo "Restarting miner", True			
 				If killMiner(miner_exe) Then
 					startMiner
@@ -279,22 +204,133 @@ Do While True
 
 	Sleep timeSleepCycle
 Loop
+' End Of Main Loop
 
 
 '---------------- FUNCTION LIBRARY ----------------
+Sub ReadConfig
+	
+	Dim n, m, p
+	Dim card_count, card_restart, ot_profiles,ot_card_indexes, temp_limit, card_data
+	Dim ot_or, ot_overrides, ot_profile_t, ot_overrides_t, ot_startafter
+	'Miner section
+	miner_section = ReadIni(IniFile,"global","miner","")
+
+	If miner_section = "" Then
+		miner_section = "miner"
+	Else
+		miner_section = "miner." & miner_section
+	End If
+
+	'Hashrate Treshold
+	hashrate_min = Int(ReadIni(IniFile,miner_section,"hashrate_treshold",0))
+
+	'Miner Executable
+	miner_dir = ReadIni(IniFile,miner_section,"directory","")
+	miner_exe = ReadIni(IniFile,miner_section,"executable","")
+	miner_args = ReadIni(IniFile,miner_section,"args","")
+
+	'URL for hashrate check, please check your port configuration in xmr-stak
+	hashrate_url = ReadIni(IniFile,miner_section,"url","")
+	hashrate_checktype = ReadIni(IniFile,miner_section,"check_type","")
+	hashrate_checkvalue = Int(ReadIni(IniFile,miner_section,"check_value",1))
+
+	'Log File, relative to script directory
+	logfile = ReadIni(IniFile,"global","logfile","minerguarddog.log")
+
+	n = 1
+	While n<>-1
+		inisection = "videocard_" & n 
+		card_name = ReadIni(IniFile,inisection,"name","")
+		ot_overrides = ""
+		If card_name = "" Then
+			n = -1
+		Else
+			card_count =  ReadIni(IniFile,inisection,"count","1")
+			card_restart =  ReadIni(IniFile,inisection,"restart","False")		
+			ot_profile =  ReadIni(IniFile,inisection,"overdriventool_profile","")
+			ot_card_indexes = ReadIni(IniFile,inisection,"overdriventool_card_indexes","")
+			temp_limit =  ReadIni(IniFile,inisection,"temp_limit","90")		
+			card_data = detectCardsData(card_name)
+			
+			For m=1 to card_count
+				ot_or = ReadIni(IniFile,inisection,"overdriventool_profile_" & m,"")			
+				If ot_or <> "" Then
+					ot_overrides = ot_overrides & m & ":" & ot_or & ";"
+				End If			
+			Next						
+			ot_overrides = stripLastChar(ot_overrides)
+			
+			'Load Timed Profiles From INI
+			p=1
+			ot_profile_t=""
+			ot_overrides_t=""
+			While p<>-1			
+				stringa = ReadIni(IniFile,inisection,"overdriventool_profile_t" & p ,"")			
+				If stringa<>"" Then					
+					ot_startafter = ReadIni(IniFile,inisection,"overdriventool_profile_t" & p & "_after",60)
+					ot_profile_t = ot_profile_t & p & ":" & stringa & ":" & ot_startafter & ";"													
+					For m=1 to card_count
+						ot_or = ReadIni(IniFile,inisection,"overdriventool_profile_t" & p & "_" & m,"")			
+						If ot_or <> "" Then						
+							ot_overrides_t = ot_overrides_t & p & ":" & m & ":" & ot_or & ";"
+						End If			
+					Next
+					p=p+1
+				Else
+					p=-1
+				End If
+			Wend
+			ot_profile_t = stripLastChar(ot_profile_t)
+			ot_overrides_t = stripLastChar(ot_overrides_t)
+			
+			Redim Preserve cards(n-1)		
+			cards(n-1) = card_name & "|" & card_count & "|" & card_restart & "|" & card_data & "|" & ot_card_indexes & "|" & ot_profile & "|" & ot_overrides & "|" & ot_profile_t & "|" & ot_overrides_t & "|" & temp_limit & "|"
+			
+			n=n+1
+		End If
+	Wend
+
+	'Temperature Monitoring
+	tempmonitor_enable = Sbool(ReadIni(IniFile,"tempmonitor","enable",false))
+	openhardwaremonitor_url = ReadIni(IniFile,"tempmonitor","url","")
+	temp_fail_action = ReadIni(IniFile,"tempmonitor","temp_fail_action","pause-miner")
+
+	'Paths
+	devcon_dir = ReadIni(IniFile,"paths","devcon_dir",scriptdir)
+	overdriventool_dir = ReadIni(IniFile,"paths","overdriventool_dir",scriptdir)
+	openhardwaremonitor_dir = ReadIni(IniFile,"tempmonitor","openhardwaremonitor_dir",scriptdir & "openhardwaremonitor")
+
+	'Global Settings
+	timeWaitStart = ReadIni(IniFile,"global","time_waitstart", 15)
+	timeWaitMinerStart = ReadIni(IniFile,"global","time_waitminerstart", 60)
+	timeWaitReboot = ReadIni(IniFile,"global","time_waitreboot", 15)
+	timeSleepCycle = ReadIni(IniFile,"global","time_checkinterval", 10)
+
+	timeout_shareacceptedchange = Int(ReadIni(IniFile,"global","timeout_shareacceptedchange", 180))
+	timeout_templimit = Int(ReadIni(IniFile,"global","timeout_templimit", 180))
+End Sub
+
 
 Function getHashrate (url)		
 	On Error Resume Next
 	Dim hashrate,response
-	Dim p1,p2,stringa
+	Dim p1,p2,slen,stringa
 	hashrate=""
 	response =	getUrl(url)					
 	If response <> "" Then	
 		Select Case hashrate_checktype
 			Case "xmr-stak"				
 				p1 = instr(1,response,"<tr><th>Totals:</th>")
-				p2 = instr(p1,response,"</tr><tr>")
-				stringa = Mid(response,p1+20,p2-p1-20)
+				If hashrate_checkvalue=1 Then 'Last 60s									
+					slen = 9
+					p1 = instr (p1,response,"</td><td>")
+					p2 = instr (p1+1,response,"</td>")					
+				Else 'Last 15m					
+					slen = 20
+					p2 = instr(p1,response,"</tr><tr>")					
+				End If
+				stringa = Mid(response,p1+slen,p2-p1-slen)				
 				p1=instrrev(stringa,"<td>")
 				hashrate = Right(stringa,len(stringa)-p1+1)
 				hashrate = replace(hashrate,"<td>","")
@@ -330,15 +366,13 @@ End Function
 
 Function getUrl (url)
 	On Error Resume Next
-	
+	Dim req, lTimeout
+	Dim i
 	Set req = CreateObject("WinHttp.WinHttpRequest.5.1")
-	for n=1 to HTTP_ATTEMPTS
+	for i=1 to HTTP_ATTEMPTS
 		'Timeout values are in milli-seconds
-		lResolve = HTTP_TIMEOUT * 1000
-		lConnect = HTTP_TIMEOUT * 1000
-		lSend = HTTP_TIMEOUT * 1000
-		lReceive = HTTP_TIMEOUT * 1000 'waiting time to receive data from server
-		req.setTimeOuts lResolve, lConnect, lSend, lReceive
+		lTimeout = HTTP_TIMEOUT * 1000		
+		req.setTimeOuts lTimeout, lTimeout, lTimeout, lTimeout
 		req.open "GET", url, False
 		req.send	
 		
@@ -348,28 +382,31 @@ Function getUrl (url)
 		else		
 			getUrl = ""
 		end if
-	Next
-	getHashrate = hashrate
+	Next	
 End Function
 
 Function detectNumberofCards(strName)
 On Error Resume Next
+Dim NumOfCards, cI, oI,oWMI
+Set oWMI = GetObject("winmgmts:\\.\root\cimv2")
 	NumOfCards=0
-	Set colItems = objWMIService.ExecQuery ("Select * from Win32_VideoController")
-	For Each objItem in colItems
-		If lcase(objItem.Name)=lcase(strname) Then
-		NumOfCards=NumOfCards+1			
+	Set cI = oWMI.ExecQuery ("Select * from Win32_VideoController")
+	For Each oI in cI
+		If lcase(oI.Name)=lcase(strName) Then
+			NumOfCards=NumOfCards+1			
 		End If
 	Next
 	detectNumberOfCards=NumOfCards
 End Function
 
 Function detectCardsData(strName)
-On Error Resume Next	
+On Error Resume Next
+	Dim ci, card_indexes, pnp_id, oWMI
+	Set oWMI = GetObject("winmgmts:\\.\root\cimv2")
 	ci = 0
 	card_indexes = ""
 	pnp_id = ""
-	Set colItems = objWMIService.ExecQuery ("Select * from Win32_VideoController")
+	Set colItems = oWMI.ExecQuery ("Select * from Win32_VideoController")
 	For Each objItem in colItems		
 		If lcase(objItem.Name)=lcase(strname) Then			
 			'Add Index
@@ -391,6 +428,8 @@ On Error Resume Next
 End Function
 
 Sub writeLog(stringa)
+	Dim fso
+	Set fso = CreateObject("Scripting.FileSystemObject")
 	fso.OpenTextFile(scriptdir & "\" & logfile, 8, True).WriteLine Now & ": " & stringa
 End Sub
 
@@ -423,25 +462,12 @@ Sub forceCScriptExecution
     End If
 End Sub
 
-Sub CheckForOtherInstances
-n=0
-Set colProcess = objWMIService.ExecQuery("Select * From Win32_Process where name = 'cscript.exe'") 
-For Each objProcess In colProcess	
-    If trim(lcase(replace(objProcess.CommandLine,"cscript",""))) = trim(lcase(Wscript.ScriptName)) Then		
-		n = n+1
-	End If
-Next
-If n>1 Then
-	Echo "Another Instance of script is already running. Quitting", False
-	Wscript.Quit
-End If
-End Sub
-
 Sub Sleep(Seconds)
 	Wscript.Sleep 1000 * Seconds
 End Sub
 
 Sub RebootSystem(SleepSecs)
+	Dim objWMIService, colOperatingSystems, objOperatingSystem
 	Echo "Rebooting in " & SleepSecs & " seconds", True
 	Sleep(SleepSecs)
 	Set objWMIService = GetObject("winmgmts:{impersonationLevel=impersonate,(Shutdown)}!\\.\root\cimv2")
@@ -453,6 +479,7 @@ Sub RebootSystem(SleepSecs)
 End Sub
 
 Sub ShutDownSystem(SleepSecs)
+	Dim objWMIService, colOperatingSystems, objOperatingSystem
 	Echo "Shutting down in " & SleepSecs & " seconds", True
 	Sleep(SleepSecs)
 	Set objWMIService = GetObject("winmgmts:{impersonationLevel=impersonate,(Shutdown)}!\\.\root\cimv2")
@@ -464,8 +491,9 @@ Sub ShutDownSystem(SleepSecs)
 End Sub
 
 Function KillMiner(exeName)	
-	For n=0 To 5		
-		WshShell.Run "TASKKILL /F /IM " & exeName,0,True
+	Dim i
+	For i=0 To 5		
+		gWshShell.Run "TASKKILL /F /IM " & exeName, 0, True
 		If checkProcess(exeName)=False Then
 			KillMiner = True
 			Exit Function
@@ -476,16 +504,19 @@ Function KillMiner(exeName)
 End Function
 
 Function checkProcess(procName)
+	On Error Resume Next
+	Dim oWMI, objDictionary, colProcesses, objProcess, colThreads, objThread
+	Dim intProcessID, strProcessName
 	checkProcess = False
 	Set objDictionary = CreateObject("Scripting.Dictionary")
-	Set objWMIService = GetObject("winmgmts:" & "{impersonationLevel=impersonate}!\\" & "." & "\root\cimv2")
-	Set colProcesses = objWMIService.ExecQuery("Select * from Win32_Process Where Name = '" & procName & "'")
+	Set oWMI = GetObject("winmgmts:{impersonationLevel=impersonate}!\\.\root\cimv2")
+	Set colProcesses = oWMI.ExecQuery("Select * from Win32_Process Where Name = '" & procName & "'")
 	
 	For each objProcess in colProcesses 
     		objDictionary.Add objProcess.ProcessID, objProcess.Name 			
 	Next
 	For each objProcess in colProcesses
-		Set colThreads = objWMIService.ExecQuery("Select * from Win32_Thread where ProcessHandle = '" & objProcess.ProcessID & "'")
+		Set colThreads = oWMI.ExecQuery("Select * from Win32_Thread where ProcessHandle = '" & objProcess.ProcessID & "'")
 		For each objThread in colThreads
 			intProcessID = CInt(objThread.ProcessHandle)
 			strProcessName = objDictionary.Item(intProcessID)		
@@ -497,9 +528,46 @@ Function checkProcess(procName)
 			End If
 		Next
 	Next
+	If Err<>0 Then
+		'The above method sometimes is unreliable, so let's check 		
+		'the process with Tasklist.exe
+		If GetProcessId(procName)>0 Then checkProcess=True
+	End If
+End Function
+
+Function GetProcessId(imageName)
+    Dim command, output, tasklist, tasks, i, cols
+	
+	GetProcessId=0
+    
+    command = "tasklist /V /FO csv"
+    command = command & " /FI ""IMAGENAME eq " + imageName + """"
+    
+    output = Trim(Shell(command))
+    tasklist = Split(output, vbNewLine)
+
+    ' starting at 1 skips first line (it contains the column headings only)
+    For i = 1 To UBound(tasklist) - 1
+        cols = Split(tasklist(i), """,""")
+        ' a line is expected to have 9 columns (0-8)
+        If UBound(cols) = 8 Then
+            GetProcessId = Trim(cols(1))
+            Exit For
+        End If
+    Next	
+End Function
+
+Function Shell(cmd)
+    Shell = WScript.CreateObject("WScript.Shell").Exec(cmd).StdOut.ReadAll()
 End Function
 
 Sub startMiner()
+	Dim overdriventool_cmd
+	Dim n, m, p
+	Dim ot_or, ot_ori, idx
+	Dim prevdir
+	Dim c, card_profile
+	
 	overdriventool_cmd = ""
 	
 	If isArray(cards) Then
@@ -509,10 +577,10 @@ Sub startMiner()
 			c = split(cards(n),"|")			
 			If sBool(c(P_CARD_RESTART))=True Then			
 				Echo "Disabling " & c(P_CARD_NAME) & ": " & c(P_CARD_PNPID), False	
-				WshShell.Run devcon_dir & "\DEVCON.EXE disable """ & c(P_CARD_PNPID) & """", 0,True
+				Run devcon_dir & "\DEVCON.EXE disable """ & c(P_CARD_PNPID) & """", True
 				Sleep DEVCON_SLEEP
 				Echo "Enabling " & c(P_CARD_NAME) & ": " & c(P_CARD_PNPID), False
-				WshShell.Run devcon_dir & "\DEVCON.EXE enable """ & c(P_CARD_PNPID) & """", 0,True
+				Run devcon_dir & "\DEVCON.EXE enable """ & c(P_CARD_PNPID) & """", True
 			End If
 		Next
 		Echo "Waiting Devices to settle", False
@@ -539,16 +607,16 @@ Sub startMiner()
 		
 		If overdriventool_cmd<>"" Then
 			Echo "Applying Overdriventool Profiles", True
-			Echo "Executing Command " & overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, False
-			WshShell.Run overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, 0, True
+			Echo "Executing Command " & overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, True
+			Run overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, True
 		End If
 	
 	End If
 	
-	prevdir = wshShell.CurrentDirectory
-	wshShell.CurrentDirectory = scriptdir & "\" & miner_dir
-	WshShell.Run miner_exe & " " & miner_args, 1, False
-	wshShell.CurrentDirectory = prevdir
+	prevdir = gWshShell.CurrentDirectory
+	gWshShell.CurrentDirectory = scriptdir & "\" & miner_dir
+	gWshShell.Run miner_exe & " " & miner_args, 1, False
+	gWshShell.CurrentDirectory = prevdir
 	Echo "Miner Started, waiting " & timeWaitMinerStart & " seconds", True
 	Sleep timeWaitMinerStart
 	
@@ -559,17 +627,18 @@ End Sub
 
 
 Sub ApplyTimedOverdrivenTool()
-Const SP_PROFINDEX = 0
-Const SP_PROFNAME = 1
-Const SP_TIME = 2
+	Dim n, p, q, c, profi, bProfile_applies, AppliedProfile, idx, ot_or, ot_ori, card_profile, overdriventool_cmd
+	Const SP_PROFINDEX = 0
+	Const SP_PROFNAME = 1
+	Const SP_TIME = 2
 
-Const SP_CARDINDEX=1
-Const SP_OVERRIDEINDEX=2 
+	Const SP_CARDINDEX=1
+	Const SP_OVERRIDEINDEX=2 
 
-overdriventool_cmd = ""
+	overdriventool_cmd = ""
 
-bProfile_applies = False
-'Build Overdriventool Command Line
+	bProfile_applies = False
+	'Build Overdriventool Command Line
 	For n=0 to ubound(cards)
 		c = split(cards(n),"|")
 		If c(P_CARD_OTPROFILE_T) <> "" Then				
@@ -578,7 +647,7 @@ bProfile_applies = False
 				profi=split(op(m),":")				
 				If inArray(profi(SP_PROFINDEX),appliedTimedProfiles)=False And timeoutExpired(date_minerstarted,profi(SP_TIME)) Then
 					bProfile_applies=True					
-					'Profile hs to be applied					
+					'Profile has to be applied					
 					AppliedProfile = profi(SP_PROFINDEX)																		
 					idx = split(c(P_CARD_INDEXES),",")								
 					'Override of current profile					
@@ -589,7 +658,7 @@ bProfile_applies = False
 							ot_ori = split(ot_or(q),":")														
 							If int(ot_ori(SP_PROFINDEX))=int(profi(SP_PROFINDEX)) and int(ot_ori(SP_CARDINDEX))=int(idx(p)) Then								
 								card_profile = ot_ori(SP_PROFNAME+1)								
-							End IF
+							End If
 						Next
 						overdriventool_cmd = overdriventool_cmd & " -p" & idx(p) & card_profile										
 					Next										
@@ -601,8 +670,8 @@ bProfile_applies = False
 	Next
 	If bProfile_applies Then	
 		Echo "Applying Overdriventool Profiles", True
-		Echo "Executing Command " & overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, False
-		WshShell.Run overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, 0, True
+		Echo "Executing Command " & overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, True
+		gWshShell.Run overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, 0, True
 		Redim Preserve appliedTimedProfiles(ubound(appliedTimedProfiles)+1)
 		appliedTimedProfiles(ubound(appliedTimedProfiles)) = AppliedProfile
 	End If
@@ -697,24 +766,25 @@ Function sBool(sValue)
 End Function
 
 Function validateConfig()
+	Dim fso
+	Set fso = CreateObject("Scripting.FileSystemObject")
 	validateConfig = True
 	
 	' Miner Executable
 	If fso.FileExists(scriptdir & miner_dir & "\" & miner_exe) = False Then
 		Echo "Error: Miner executable " & miner_dir & "\" & miner_exe & " doesn't exist.", False
 		validateConfig = False
-	End If
-	
-	'Devcon
-	If fso.FileExists(devcon_dir & "\devcon.exe") = False Then
-		Echo "Error: Devcon.exe executable doesn't exist in " & devcon_dir, False
-		ValidateConfig = False
-	End If
+	End If		
 	
 	'Overdriventool
 	If fso.FileExists(overdriventool_dir & "\overdriventool.exe") = False Then
 		Echo "Error: Overdriventool.exe executable doesn't exist in " & overdriventool_dir, False
 		ValidateConfig = False
+	End If
+	
+	'Devcon
+	If fso.FileExists(devcon_dir & "\devcon.exe") = False Then
+		Echo "Warning: Devcon.exe executable doesn't exist in " & devcon_dir, False		
 	End If
 	
 	'Temperature Monitor
@@ -750,6 +820,7 @@ Sub resetCounters
 End Sub
 
 function cardTemperatures(strjson,strName,cCount)	
+	Dim str, n, s1, Temp
 	str=lcase(strjson)	
 	s1 = 1
 	Redim Temps(cCount)
@@ -777,11 +848,12 @@ function cardTemperatures(strjson,strName,cCount)
 end function
 
 Sub checkOpenhardwaremonitor	
+	Dim n
 	For n=1 to 3		
 		If checkProcess("openhardwaremonitor.exe") = False Then
 			Echo "Starting Openhardwaremonitor", True
-			WshShell.Run openhardwaremonitor_dir & "\openhardwaremonitor.exe",1,False
-			Sleep 1
+			gWshShell.Run openhardwaremonitor_dir & "\openhardwaremonitor.exe",1,False
+			Sleep 0.5
 		Else
 			Exit For
 		End If		
@@ -798,6 +870,7 @@ End Function
 
 Function inArray(needle,haystack)
 	inArray = False
+	Dim n
 	For n=0 to ubound(haystack)
 		if haystack(n)=needle Then inArray = True
 	Next	
@@ -805,8 +878,9 @@ End Function
 
 Function stringIsAplhaFirst(string1,string2)
 	'Alphabetical sorting with number last
+	Dim bRet
 	bRet = True
-	sAlpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
+	Const S_ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
 	If len(string1)>len(string2) Then
 		sl = len(string2)
 	Else
@@ -815,10 +889,10 @@ Function stringIsAplhaFirst(string1,string2)
 	For i=1 to sl
 		c1 = ucase(mid(string1,i,1))
 		c2 = ucase(mid(string2,i,1))	
-		If instr(sAlpha,c1)>instr(sAlpha,c2) Then
+		If instr(S_ALPHA,c1)>instr(S_ALPHA,c2) Then
 			bRet = False
 			Exit For
 		End If	
 	Next
-strSort=bREt
+strSort=bRet
 End Function
