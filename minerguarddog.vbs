@@ -37,6 +37,9 @@ Dim miner_dir, miner_exe, miner_args
 Dim hashrate_url, hashrate_checktype, hashrate_checkvalue
 Dim miner_restart_attempts
 Dim date_last_miner_restart
+Dim rig_identifier
+
+Dim monitor_only
 
 'Temp Monitor 
 Dim tempmonitor_enable, openhardwaremonitor_url, temp_fail_action
@@ -47,10 +50,16 @@ Dim	devcon_dir, overdriventool_dir, openhardwaremonitor_dir
 'Timeouts
 Dim timeout_shareacceptedchange, timeout_templimit
 
+'Notifications
+Dim notifications
+Dim telegram_api_key, telegram_chat_id
+Dim notify_message
+
 Dim scriptdir
 Dim gWshShell
 
 Dim cards()
+Dim cards_TempOK()
 ReDim appliedTimedProfiles(0)
 
 forceCScriptExecution
@@ -64,7 +73,7 @@ gWshShell.CurrentDirectory = scriptdir
 
 ' Read Configuration from INI File
 ReadConfig
-
+notify_message = ""
 Echo "MinerGuardDog Version " & VERSION, True
 
 If ValidateConfig=False Then Wscript.Quit
@@ -76,7 +85,9 @@ Echo "Hashrate threshold set to: " & hashrate_min & " H/s", True
 Echo "Logging to file: " & logfile, True
 
 If isArray(cards) Then
+	Redim cards_TempOK(ubound(cards))
 	For n=0 to ubound(cards)
+		cards_TempOK(n) = True
 		c = split(cards(n),"|")
 		Echo "Monitoring video card: " & c(P_CARD_NAME) & ", " & c(P_CARD_COUNT) & "x (" & c(P_CARD_PNPID) & ")", True
 	Next
@@ -100,7 +111,8 @@ date_minerstarted = Now
 Dim card
 Dim i,nc,m
 Dim Cards_OK, Temp_OK
-Dim Counter_MinerRestart, Counter_MinerPaused, Counter_SystemReboot, Counter_TempFail
+'Counters
+Dim Counter_MinerRestart, Counter_MinerPaused, Counter_SystemReboot, Counter_TempFail, Time_Start
 Dim prev_sharesaccepted
 Dim date_shareacceptedchange
 Dim miner_paused
@@ -108,6 +120,7 @@ Dim date_minerstarted
 Dim date_minerpaused
 
 Counter_MinerRestart = 0
+Time_Start = Now
 
 Do While True
 	'Check Cards
@@ -120,7 +133,7 @@ Do While True
 			nc = detectNumberOfCards(card(P_CARD_NAME)) 
 			If nc <> int(card(P_CARD_COUNT)) Then
 				Echo "Number of video cards mismatch (" & card(P_CARD_NAME) & ":" & nc & "/" & card(P_CARD_COUNT) & "). Rebooting system in " &  timeWaitReboot & " seconds.", True
-				RebootSystem timeWaitReboot		
+				If monitor_only=False Then RebootSystem timeWaitReboot		
 			Else
 				Echo "Number of video cards is OK (" & card(P_CARD_NAME) & ": " & nc & "/" & card(P_CARD_COUNT) & ")",False
 			End If
@@ -132,31 +145,35 @@ Do While True
 				Temps = cardTemperatures(Temps,card(P_CARD_NAME),card(P_CARD_COUNT))
 				Temp_OK = True		
 				For m=0 To ubound(Temps)					
-					If int(Temps(m)) > int(card(P_CARD_TEMP_LIMIT)) Then
-						Echo "Card " &  card(P_CARD_NAME) & ":" & m & " Temperature is over limit " & Temps(m) & "/" & card(P_CARD_TEMP_LIMIT) , True
+					If int(Temps(m)) > int(card(P_CARD_TEMP_LIMIT)) Then						
+						Echo "Card " &  card(P_CARD_NAME) & ":" & m & " Temperature is over limit " & Temps(m) & "/" & card(P_CARD_TEMP_LIMIT), Cards_TempOK(i)
 						Temp_OK = False						
-						Select Case temp_fail_action
-							case "pause-miner"
-								Echo "Pausing Miner for " & timeout_templimit & " seconds", True
-								Counter_MinerPaused = Counter_MinerPaused + 1
-								miner_paused = True
-								date_minerpaused = Now
-							case "reboot"								
-								rebootSystem
-							case "shutdown"
-								shutdownSystem								
-						End Select					
+						If monitor_only=False then
+							Select Case temp_fail_action
+								case "pause-miner"
+									Echo "Pausing Miner for " & timeout_templimit & " seconds", Cards_TempOK(i)
+									Counter_MinerPaused = Counter_MinerPaused + 1
+									miner_paused = True
+									date_minerpaused = Now
+								case "reboot"								
+									rebootSystem
+								case "shutdown"
+									shutdownSystem								
+							End Select
+						End If
+						Cards_TempOK(i) = False
 					End If
 				Next
-				If Temp_OK Then
+				If Temp_OK Then					
 					ts = join(Temps,",")
-					Echo "Temperatures of video card " & card(P_CARD_NAME) &" are OK (" & right(ts,len(ts)-1) & ")", False
+					Echo "Temperatures of video card " & card(P_CARD_NAME) &" are OK (" & right(ts,len(ts)-1) & ")", Not Cards_TempOK(i)					
 					If miner_paused = True Then
 						If timeoutExpired(date_minerpaused,timeout_templimit) Then
-							Echo "Resuming Miner", False
+							Echo "Resuming Miner", Cards_TempOK(i)
 							miner_paused = False
 						End If
 					End If
+					Cards_TempOK(i) = True
 				End If
 			End If
 		Next		
@@ -165,16 +182,18 @@ Do While True
 	'Check Miner
 	If miner_paused=False Then
 		If checkProcess(miner_exe)=False Then
-			Echo "Miner process is not running or not responding, Restarting Miner", True
-			If killMiner(miner_exe)=True Then 
-				startMiner 
-				Counter_MinerRestart = Counter_MinerRestart + 1
-			Else 
-				Echo "Unable to kill miner, rebooting", True
-				rebootSystem timeWaitReboot
+			Echo "Miner process is not running or not responding", True
+			If monitor_only=False Then
+				If killMiner(miner_exe)=True Then 
+					startMiner 
+					Counter_MinerRestart = Counter_MinerRestart + 1
+				Else 
+					Echo "Unable to kill miner, rebooting", True
+					rebootSystem timeWaitReboot
+				End If
 			End If
 		Else
-			ApplyTimedOverdrivenTool
+			If monitor_only=False Then ApplyTimedOverdrivenTool
 		End If	
 	Else
 		If checkProcess(miner_exe) Then
@@ -195,18 +214,21 @@ Do While True
 				Else
 					Echo "Hashrate drop detected (" & hashrate & ")", True
 				End If
-				Echo "Restarting miner", True			
-				If killMiner(miner_exe) Then
-					startMiner
-				Else
-					Echo "Unable to kill miner. Rebooting", True
-					RebootSystem timeWaitReboot
-				End If			
+				If monitor_only = False Then
+					Echo "Restarting miner", True			
+					If killMiner(miner_exe) Then
+						startMiner
+					Else
+						Echo "Unable to kill miner. Rebooting", True
+						RebootSystem timeWaitReboot
+					End If
+				End If
 		Else			
 			Echo "Hashrate is normal (" & hashrate & "/" & hashrate_min & ")", False
 		End If
 	End If
-
+	
+	EndLoop
 	Sleep timeSleepCycle
 Loop
 ' End Of Main Loop
@@ -312,12 +334,30 @@ Sub ReadConfig
 	timeWaitReboot = ReadIni(IniFile,"global","time_waitreboot", 15)
 	timeSleepCycle = ReadIni(IniFile,"global","time_checkinterval", 10)
 	timeoutMinerRestartReset = ReadIni(IniFile,"global","timeout_miner_restart_reset", 300)
-	maxMinerRestartAttempts = ReadIni(IniFile,"global","max_miner_restart_attempts", 3)
-
-	timeout_shareacceptedchange = Int(ReadIni(IniFile,"global","timeout_shareacceptedchange", 180))
+	timeout_shareacceptedchange = Int(ReadIni(IniFile,"global","timeout_shareacceptedchange", 300))
 	timeout_templimit = Int(ReadIni(IniFile,"global","timeout_templimit", 180))
+	maxMinerRestartAttempts = ReadIni(IniFile,"global","max_miner_restart_attempts", 3)
+		
+	monitor_only = sBool(ReadIni(IniFile,"global","monitor_only", false))
+		
+	'Notifications
+	rig_identifier = ReadIni(Inifile,"global","rig_identifier","My Rig")
+	notifications = ReadIni(Inifile,"global","notifications","disabled")
+	If notifications="telegram" Then
+		telegram_api_key = ReadIni(IniFile,"notifications.telegram","api_key","")
+		telegram_chat_id = ReadIni(IniFile,"notifications.telegram","chat_id","")
+	End If
+	
+	ReadPersistentData
 End Sub
 
+Sub ReadPersistentData()
+	Counter_SystemReboot = Int(ReadIni(Inifile,"data","Counter_SytemReboot","0"))
+End Sub
+
+Sub WritePersistentData()
+	WriteIni IniFile,"data","Counter_SystemReboot",Counter_SystemReboot
+End Sub
 
 Function getHashrate (url)		
 	On Error Resume Next
@@ -441,8 +481,11 @@ Sub writeLog(stringa)
 End Sub
 
 Sub Echo(stringa, logToFile)
-	Wscript.Echo Now & ": " & stringa
-	if logToFile = True Then writeLog stringa
+	Wscript.Echo Now & ": " & stringa	
+	if logToFile = True Then 
+		notify_message = notify_message & stringa & VbCrLf
+		writeLog stringa
+	End If
 End Sub
 
 Function GetParentProcessId()
@@ -482,6 +525,7 @@ Sub RebootSystem(SleepSecs)
 	For Each objOperatingSystem in colOperatingSystems
 	    	objOperatingSystem.Reboot()
 	Next
+	EndLoop
 	Wscript.Quit
 End Sub
 
@@ -494,6 +538,7 @@ Sub ShutDownSystem(SleepSecs)
 	For Each objOperatingSystem in colOperatingSystems
 	    	objOperatingSystem.Reboot()
 	Next
+	EndLoop
 	Wscript.Quit
 End Sub
 
@@ -676,7 +721,7 @@ Sub ApplyTimedOverdrivenTool()
 		if bProfile_applies Then Exit For
 	Next
 	If bProfile_applies Then	
-		Echo "Applying Overdriventool Profiles", True
+		Echo "Applying Stepping Overdriventool Profiles", True
 		Echo "Executing Command " & overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, True
 		gWshShell.Run overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, 0, True
 		Redim Preserve appliedTimedProfiles(ubound(appliedTimedProfiles)+1)
@@ -1031,3 +1076,33 @@ Function stringIsAplhaFirst(string1,string2)
 	Next
 strSort=bRet
 End Function
+
+'Telegram Monitoring
+Function telegramBotSend(sApiKey,sChatID,sMessage)
+  Dim oHTTP
+  Dim sUrl, sRequest
+  sUrl = "https://api.telegram.org/bot" & sApiKey & "/sendMessage"
+  sRequest = "text=" & sMessage & "&chat_id=" & sChatID
+  set oHTTP = CreateObject("Microsoft.XMLHTTP")
+  oHTTP.open "POST", sUrl,false
+  oHTTP.setRequestHeader "Content-Type", "application/x-www-form-urlencoded"
+  oHTTP.setRequestHeader "Content-Length", Len(sRequest)
+  oHTTP.send sRequest
+  telegramBotSend = oHTTP.responseText
+ End Function
+ 
+ Sub sendReport(sMessage)
+	sMessage = "Rig ID: " & rig_identifier & VbCrLf & sMessage
+	If notifications = "telegram" Then
+		echo "Sending Notification to Telegram", False
+		telegramBotSend telegram_api_key, telegram_chat_id, sMessage		
+	End If
+ End Sub
+ 
+ Sub EndLoop
+	If notify_message<>"" then 		
+		sendReport notify_message
+		notify_message = ""
+	End If
+	WritePersistentData
+ End Sub
