@@ -2,7 +2,7 @@
 ' (c) 2018 Riccardo Bicelli <r.bicelli@gmail.com>
 ' This Program is Free Software
 
-Const VERSION = "0.9.3"
+Const VERSION = "0.10.1"
 
 ' Initialization
 Const DEVCON_SLEEP = 2
