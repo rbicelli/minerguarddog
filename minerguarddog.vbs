@@ -2,7 +2,7 @@
 ' (c) 2018 Riccardo Bicelli <r.bicelli@gmail.com>
 ' This Program is Free Software
 
-Const VERSION = "0.10.1"
+Const VERSION = "0.10.3"
 
 ' Initialization
 Const DEVCON_SLEEP = 2
@@ -60,6 +60,7 @@ Dim gWshShell
 
 Dim cards()
 Dim cards_TempOK()
+Dim Cards_NumOK()
 ReDim appliedTimedProfiles(0)
 
 forceCScriptExecution
@@ -74,6 +75,7 @@ gWshShell.CurrentDirectory = scriptdir
 ' Read Configuration from INI File
 ReadConfig
 notify_message = ""
+
 Echo "MinerGuardDog Version " & VERSION, True
 
 If ValidateConfig=False Then Wscript.Quit
@@ -86,8 +88,10 @@ Echo "Logging to file: " & logfile, True
 
 If isArray(cards) Then
 	Redim cards_TempOK(ubound(cards))
+	Redim cards_NumOK(ubound(cards))
 	For n=0 to ubound(cards)
 		cards_TempOK(n) = True
+		cards_NumOK(n) = True
 		c = split(cards(n),"|")
 		Echo "Monitoring video card: " & c(P_CARD_NAME) & ", " & c(P_CARD_COUNT) & "x (" & c(P_CARD_PNPID) & ")", True
 	Next
@@ -116,11 +120,13 @@ Dim Counter_MinerRestart, Counter_MinerPaused, Counter_SystemReboot, Counter_Tem
 Dim prev_sharesaccepted
 Dim date_shareacceptedchange
 Dim miner_paused
+Dim miner_running
 Dim date_minerstarted
 Dim date_minerpaused
 
 Counter_MinerRestart = 0
 Time_Start = Now
+miner_running = False
 
 Do While True
 	'Check Cards
@@ -132,10 +138,12 @@ Do While True
 			'Check Number of Cards
 			nc = detectNumberOfCards(card(P_CARD_NAME)) 
 			If nc <> int(card(P_CARD_COUNT)) Then
-				Echo "Number of video cards mismatch (" & card(P_CARD_NAME) & ":" & nc & "/" & card(P_CARD_COUNT) & "). Rebooting system in " &  timeWaitReboot & " seconds.", True
-				If monitor_only=False Then RebootSystem timeWaitReboot		
+				Echo "Number of video cards mismatch (" & card(P_CARD_NAME) & ":" & nc & "/" & card(P_CARD_COUNT) & ")", Cards_NumOK(i)				
+				Cards_NumOK(i) = False
+				If monitor_only=False Then RebootSystem timeWaitReboot				
 			Else
-				Echo "Number of video cards is OK (" & card(P_CARD_NAME) & ": " & nc & "/" & card(P_CARD_COUNT) & ")",False
+				Cards_NumOK(i)=True
+				Echo "Number of video cards is OK (" & card(P_CARD_NAME) & ": " & nc & "/" & card(P_CARD_COUNT) & ")", Not Cards_NumOK(i)				
 			End If
 			
 			'Temperature Check			
@@ -182,6 +190,7 @@ Do While True
 	'Check Miner
 	If miner_paused=False Then
 		If checkProcess(miner_exe)=False Then
+			miner_running = False
 			Echo "Miner process is not running or not responding", True
 			If monitor_only=False Then
 				If killMiner(miner_exe)=True Then 
@@ -192,15 +201,17 @@ Do While True
 					rebootSystem timeWaitReboot
 				End If
 			End If
-		Else
+		Else			
+			Echo "Miner is Running", Not miner_running
+			miner_running = True
 			If monitor_only=False Then ApplyTimedOverdrivenTool
 		End If	
 	Else
-		If checkProcess(miner_exe) Then
-			If killMiner(miner_exe)=False Then
-				Echo "Unable to kill miner", True
-				rebootSystem timeWaitReboot
-			End If			
+		If checkProcess(miner_exe) Then			
+				If killMiner(miner_exe)=False Then
+					Echo "Unable to kill miner", True
+					rebootSystem timeWaitReboot
+				End If			
 		End If
 	End If
 	
@@ -228,7 +239,7 @@ Do While True
 		End If
 	End If
 	
-	EndLoop
+	EndLoop False
 	Sleep timeSleepCycle
 Loop
 ' End Of Main Loop
@@ -393,7 +404,7 @@ Function getHashrate (url)
 				p1 = instr(1,response,"""num_accepted"":")
 				p2 = instr(p1,response,",")
 				stringa = Trim(Mid(response,p1+15,p2-p1-15))
-				echo "Share Accepted: " & stringa,False
+				echo "Shares Accepted: " & stringa,False
 				If prev_sharesaccepted = stringa Then					
 					If timeoutExpired(date_shareacceptedchange,timeout_shareacceptedchange) Then
 						Echo "cast-xmr is not submitting hashes",True
@@ -519,13 +530,14 @@ End Sub
 Sub RebootSystem(SleepSecs)
 	Dim objWMIService, colOperatingSystems, objOperatingSystem
 	Echo "Rebooting in " & SleepSecs & " seconds", True
+	Counter_SystemReboot = Counter_SystemReboot + 1
+	EndLoop True
 	Sleep(SleepSecs)
 	Set objWMIService = GetObject("winmgmts:{impersonationLevel=impersonate,(Shutdown)}!\\.\root\cimv2")
 	Set colOperatingSystems = objWMIService.ExecQuery("Select * from Win32_OperatingSystem")
 	For Each objOperatingSystem in colOperatingSystems
 	    	objOperatingSystem.Reboot()
 	Next
-	EndLoop
 	Wscript.Quit
 End Sub
 
@@ -538,7 +550,7 @@ Sub ShutDownSystem(SleepSecs)
 	For Each objOperatingSystem in colOperatingSystems
 	    	objOperatingSystem.Reboot()
 	Next
-	EndLoop
+	EndLoop True
 	Wscript.Quit
 End Sub
 
@@ -1056,31 +1068,16 @@ Function inArray(needle,haystack)
 	Next	
 End Function
 
-Function stringIsAplhaFirst(string1,string2)
-	'Alphabetical sorting with number last
-	Dim bRet
-	bRet = True
-	Const S_ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
-	If len(string1)>len(string2) Then
-		sl = len(string2)
-	Else
-		sl = len(string1)
-	End If
-	For i=1 to sl
-		c1 = ucase(mid(string1,i,1))
-		c2 = ucase(mid(string2,i,1))	
-		If instr(S_ALPHA,c1)>instr(S_ALPHA,c2) Then
-			bRet = False
-			Exit For
-		End If	
-	Next
-strSort=bRet
+Function TelegramEncode(sString)
+	'Simple URL Encodingfor Telegram
+	TelegramEncode = replace(sString,"&","%26")
 End Function
 
 'Telegram Monitoring
 Function telegramBotSend(sApiKey,sChatID,sMessage)
   Dim oHTTP
   Dim sUrl, sRequest
+  sMessage = TelegramEncode(sMessage)
   sUrl = "https://api.telegram.org/bot" & sApiKey & "/sendMessage"
   sRequest = "text=" & sMessage & "&chat_id=" & sChatID
   set oHTTP = CreateObject("Microsoft.XMLHTTP")
@@ -1094,15 +1091,15 @@ Function telegramBotSend(sApiKey,sChatID,sMessage)
  Sub sendReport(sMessage)
 	sMessage = "Rig ID: " & rig_identifier & VbCrLf & sMessage
 	If notifications = "telegram" Then
-		echo "Sending Notification to Telegram", False
+		echo "Sending Telegram Notification", False
 		telegramBotSend telegram_api_key, telegram_chat_id, sMessage		
 	End If
  End Sub
  
- Sub EndLoop
+ Sub EndLoop(SavePeristentData)
 	If notify_message<>"" then 		
 		sendReport notify_message
 		notify_message = ""
 	End If
-	WritePersistentData
+	If SavePersistentData Then WritePersistentData
  End Sub

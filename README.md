@@ -9,15 +9,17 @@ This watchdog comes in help:
 * Checks for hashrate drops, otherwise the watchdog restars the miner
 * Checks temperatures of your cards, in case temperature raises above limit you set it pauses miner, reboot or shutdown system according to settings
 * Auto detect cards and applies Overdriventool profiles. You can schedule to apply profiles after miner is started. See minerguardog.example.ini for better explanation
-* Telegram Notifications
+* Send Telegram Notifications
 
 Before starting miner the watchdog disables then re-enables video cards and applies overdriventool profiles.
 
 ## Installation
 * Place files minerguarddog.vbs and minergguarddog.example.ini in your miners directory.
-* It is recommended that you put your miner in a subdirectory where the script is contained.
+* Place your miner(s) in a subdirectory where the script is contained.
 * Place [overdriventool.exe](https://forums.guru3d.com/threads/overdriventool-tool-for-amd-gpus.416116/) and [devcon.exe](https://docs.microsoft.com/en-us/windows-hardware/drivers/devtest/devcon) in the script directory.
-* For temperature monitoring place [openhardwaremonitor](http://www.openhardwaremonitor.org) in scriptdir/openhardwaremonitor,and configure HTTP monitoring in OHM
+* For temperature monitoring place [openhardwaremonitor](http://www.openhardwaremonitor.org) in scriptdir/openhardwaremonitor
+* Run Openhardwaremonitor and Configure HTTP Monitoring: Set port in Options->Remote Web Server->Port, and run web server Options->Remote Web Server->Run. Close Openhardwaremonitor in order to save configuration.
 * Rename minergguarddog.example.ini in minerguarddog.ini
 * Edit minerguarddog.ini to suit your needs, configuration is well commented so it's easy
-* Run minerguarddog.vbs as Admin or schedule at user logon with task scheduler, making sure the process will be started as admin
+* Run minerguarddog.vbs as Admin or schedule at user logon with task scheduler, making sure the process is started as admin
+
