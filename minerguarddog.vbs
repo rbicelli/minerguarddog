@@ -2,7 +2,7 @@
 ' (c) 2018 Riccardo Bicelli <r.bicelli@gmail.com>
 ' This Program is Free Software
 
-Const VERSION = "0.10.3"
+Const VERSION = "0.12.1"
 
 ' Initialization
 Const DEVCON_SLEEP = 2
@@ -27,7 +27,7 @@ Dim timeWaitStart, timeWaitReboot, timeWaitMinerStart, timeSleepCycle, timeoutMi
 Dim maxMinerRestartAttempts
 
 'Ini File Variables
-Dim IniFile
+Dim IniFile, dataIniFile
 Dim logfile
 
 'Miner
@@ -38,6 +38,12 @@ Dim hashrate_url, hashrate_checktype, hashrate_checkvalue
 Dim miner_restart_attempts
 Dim date_last_miner_restart
 Dim rig_identifier
+Dim pool_autoswitch
+Dim pool_autoswitch_time
+
+Dim current_pool
+Dim current_pool_time_elapsed
+Dim w_current_pool_time_elapsed
 
 Dim monitor_only
 
@@ -68,6 +74,7 @@ forceCScriptExecution
 scriptdir = replace(WScript.ScriptFullName,WScript.ScriptName,"")
 
 IniFile = scriptdir & "minerguarddog.ini"
+DataIniFile = scriptdir & "minerguarddog.dat"
 
 Set gWshShell = CreateObject("WScript.Shell")
 gWshShell.CurrentDirectory = scriptdir
@@ -93,7 +100,7 @@ If isArray(cards) Then
 		cards_TempOK(n) = True
 		cards_NumOK(n) = True
 		c = split(cards(n),"|")
-		Echo "Monitoring video card: " & c(P_CARD_NAME) & ", " & c(P_CARD_COUNT) & "x (" & c(P_CARD_PNPID) & ")", True
+		Echo "Monitoring Video Card: " & c(P_CARD_NAME) & ", " & c(P_CARD_COUNT) & "x (" & c(P_CARD_PNPID) & ")", True
 	Next
 Else
 	Echo "No video card defined. Monitoring Disabled", True
@@ -106,7 +113,7 @@ Echo "Waiting " & timeWaitStart & " seconds before starting watchdog", False
 
 Sleep timeWaitStart
 
-Echo "Starting Watchdog ...", True
+Echo "Starting Watchdog", True
 
 miner_paused = False
 date_minerstarted = Now
@@ -124,9 +131,19 @@ Dim miner_running
 Dim date_minerstarted
 Dim date_minerpaused
 
+'Flags
+Dim Flag_cleanShutDown
+
 Counter_MinerRestart = 0
 Time_Start = Now
 miner_running = False
+ReadPersistentData
+
+If Flag_cleanShutDown = False Then
+	Echo "Detected unclean shutdown or abnormal program termination", True
+End If
+
+WriteDirtyData
 
 Do While True
 	'Check Cards
@@ -138,12 +155,12 @@ Do While True
 			'Check Number of Cards
 			nc = detectNumberOfCards(card(P_CARD_NAME)) 
 			If nc <> int(card(P_CARD_COUNT)) Then
-				Echo "Number of video cards mismatch (" & card(P_CARD_NAME) & ":" & nc & "/" & card(P_CARD_COUNT) & ")", Cards_NumOK(i)				
+				Echo card(P_CARD_NAME) & ": Cards Count Mismatch (" & nc & "/" & card(P_CARD_COUNT) & ")", Cards_NumOK(i)				
 				Cards_NumOK(i) = False
 				If monitor_only=False Then RebootSystem timeWaitReboot				
 			Else
 				Cards_NumOK(i)=True
-				Echo "Number of video cards is OK (" & card(P_CARD_NAME) & ": " & nc & "/" & card(P_CARD_COUNT) & ")", Not Cards_NumOK(i)				
+				Echo card(P_CARD_NAME) & ": Cards Count OK (" & nc & "/" & card(P_CARD_COUNT) & ")", Not Cards_NumOK(i)				
 			End If
 			
 			'Temperature Check			
@@ -154,7 +171,7 @@ Do While True
 				Temp_OK = True		
 				For m=0 To ubound(Temps)					
 					If int(Temps(m)) > int(card(P_CARD_TEMP_LIMIT)) Then						
-						Echo "Card " &  card(P_CARD_NAME) & ":" & m & " Temperature is over limit " & Temps(m) & "/" & card(P_CARD_TEMP_LIMIT), Cards_TempOK(i)
+						Echo card(P_CARD_NAME) & ":" & m & " Temperatures over threshold " & Temps(m) & "/" & card(P_CARD_TEMP_LIMIT), Cards_TempOK(i)
 						Temp_OK = False						
 						If monitor_only=False then
 							Select Case temp_fail_action
@@ -174,7 +191,7 @@ Do While True
 				Next
 				If Temp_OK Then					
 					ts = join(Temps,",")
-					Echo "Temperatures of video card " & card(P_CARD_NAME) &" are OK (" & right(ts,len(ts)-1) & ")", Not Cards_TempOK(i)					
+					Echo card(P_CARD_NAME) & ": Temperatures OK (" & right(ts,len(ts)-1) & ")", Not Cards_TempOK(i)					
 					If miner_paused = True Then
 						If timeoutExpired(date_minerpaused,timeout_templimit) Then
 							Echo "Resuming Miner", Cards_TempOK(i)
@@ -191,13 +208,13 @@ Do While True
 	If miner_paused=False Then
 		If checkProcess(miner_exe)=False Then
 			miner_running = False
-			Echo "Miner process is not running or not responding", True
+			Echo "Miner process not running or not responding", True
 			If monitor_only=False Then
 				If killMiner(miner_exe)=True Then 
 					startMiner 
 					Counter_MinerRestart = Counter_MinerRestart + 1
 				Else 
-					Echo "Unable to kill miner, rebooting", True
+					Echo "Unable to kill miner", True
 					rebootSystem timeWaitReboot
 				End If
 			End If
@@ -223,7 +240,7 @@ Do While True
 				If hashrate = -1 Then
 					Echo "Miner seems crashed", False
 				Else
-					Echo "Hashrate drop detected (" & hashrate & ")", True
+					Echo "Hashrate drop detected (" & hashrate & "/" & hashrate_min & ")", True
 				End If
 				If monitor_only = False Then
 					Echo "Restarting miner", True			
@@ -239,7 +256,28 @@ Do While True
 		End If
 	End If
 	
-	EndLoop False
+	'xmr-stak pool switch
+	If miner_paused = False And pool_autoswitch=True and hashrate_checktype="xmr-stak" and monitor_only=False Then			
+			w_current_pool_time_elapsed = datediff("s", date_minerstarted, now) + current_pool_time_elapsed
+			If  w_current_pool_time_elapsed > pool_autoswitch_time Then
+				'Switch Pool
+				Echo "Switching from pool " & current_pool, True
+				If SwitchPoolFiles Then										
+					current_pool_time_elapsed = 0
+					w_current_pool_time_elapsed = 0
+					If killMiner(miner_exe) Then						
+						startMiner
+					Else
+						Echo "Unable to kill miner. Rebooting", True
+						RebootSystem timeWaitReboot
+					End If 
+				Else
+					echo "Error switching pool", false
+				End If
+			End If			
+	End If
+	
+	EndLoop True
 	Sleep timeSleepCycle
 Loop
 ' End Of Main Loop
@@ -261,18 +299,23 @@ Sub ReadConfig
 	End If
 
 	'Hashrate Treshold
-	hashrate_min = Int(ReadIni(IniFile,miner_section,"hashrate_treshold",0))
+	hashrate_min = Int(ReadIni(IniFile,miner_section,"hashrate_threshold",0))
 
 	'Miner Executable
 	miner_dir = ReadIni(IniFile,miner_section,"directory","")
 	miner_exe = ReadIni(IniFile,miner_section,"executable","")
-	miner_args = ReadIni(IniFile,miner_section,"args","")
+	miner_args = ReadIni(IniFile,miner_section,"args","")		
 
 	'URL for hashrate check, please check your port configuration in xmr-stak
 	hashrate_url = ReadIni(IniFile,miner_section,"url","")
 	hashrate_checktype = ReadIni(IniFile,miner_section,"check_type","")
 	hashrate_checkvalue = Int(ReadIni(IniFile,miner_section,"check_value",1))
 
+	'Pool autoswitch
+	pool_autoswitch = SBool(ReadIni(IniFile,miner_section,"pool_autoswitch",false))
+	pool_autoswitch_time = Int(ReadIni(IniFile,miner_section,"pool_autoswitch_time","0")) * 60
+	pool_autoswitch_limit = Int(ReadIni(IniFile,"global","pool_autoswitch_limit","1"))
+	
 	'Log File, relative to script directory
 	logfile = ReadIni(IniFile,"global","logfile","minerguarddog.log")
 
@@ -358,16 +401,38 @@ Sub ReadConfig
 		telegram_api_key = ReadIni(IniFile,"notifications.telegram","api_key","")
 		telegram_chat_id = ReadIni(IniFile,"notifications.telegram","chat_id","")
 	End If
-	
-	ReadPersistentData
+		
 End Sub
 
 Sub ReadPersistentData()
-	Counter_SystemReboot = Int(ReadIni(Inifile,"data","Counter_SytemReboot","0"))
+	dim fso, f
+	Set fso=CreateObject("Scripting.FileSystemObject")
+	If (fso.FileExists(dataIniFile)=False) Then 
+		Echo "Create persistent data file " & dataIniFile, True
+		set f=fso.CreateTextFile(dataIniFile,True)
+		set f = Nothing		
+	End If
+	set fso = Nothing
+	current_pool = Int(ReadIni(dataInifile,"data","current_pool","0"))
+	current_pool_time_elapsed = Int(ReadIni(dataInifile,"data","current_pool_time_elapsed","0"))
+	w_current_pool_time_elapsed = current_pool_time_elapsed
+	Counter_SystemReboot = Int(ReadIni(dataInifile,"data","Counter_SytemReboot","0"))	
+	Flag_cleanShutDown = sBool(ReadIni(dataInifile,"data","Clean_Shutdown","true"))
 End Sub
 
 Sub WritePersistentData()
-	WriteIni IniFile,"data","Counter_SystemReboot",Counter_SystemReboot
+	WriteIni dataIniFile,"data","Counter_SystemReboot",Counter_SystemReboot	
+	WriteIni dataIniFile,"data","current_pool_time_elapsed",w_current_pool_time_elapsed
+	WriteIni dataIniFile,"data","current_pool",current_pool	
+End Sub
+
+Sub WriteDirtyData()
+	WriteIni dataIniFile,"data","Clean_Shutdown","false"	
+End Sub
+
+Sub ExitClean
+	WriteIni dataIniFile,"data","Clean_Shutdown","true"
+	Wscript.Quit
 End Sub
 
 Function getHashrate (url)		
@@ -529,7 +594,7 @@ End Sub
 
 Sub RebootSystem(SleepSecs)
 	Dim objWMIService, colOperatingSystems, objOperatingSystem
-	Echo "Rebooting in " & SleepSecs & " seconds", True
+	Echo "Rebooting System in " & SleepSecs & " seconds", True
 	Counter_SystemReboot = Counter_SystemReboot + 1
 	EndLoop True
 	Sleep(SleepSecs)
@@ -538,12 +603,12 @@ Sub RebootSystem(SleepSecs)
 	For Each objOperatingSystem in colOperatingSystems
 	    	objOperatingSystem.Reboot()
 	Next
-	Wscript.Quit
+	ExitClean
 End Sub
 
 Sub ShutDownSystem(SleepSecs)
 	Dim objWMIService, colOperatingSystems, objOperatingSystem
-	Echo "Shutting down in " & SleepSecs & " seconds", True
+	Echo "Shutting down System in " & SleepSecs & " seconds", True
 	Sleep(SleepSecs)
 	Set objWMIService = GetObject("winmgmts:{impersonationLevel=impersonate,(Shutdown)}!\\.\root\cimv2")
 	Set colOperatingSystems = objWMIService.ExecQuery("Select * from Win32_OperatingSystem")
@@ -551,7 +616,7 @@ Sub ShutDownSystem(SleepSecs)
 	    	objOperatingSystem.Reboot()
 	Next
 	EndLoop True
-	Wscript.Quit
+	ExitClean
 End Sub
 
 Function KillMiner(exeName)	
@@ -640,10 +705,10 @@ Sub startMiner()
 		For n=0 To ubound(cards)			
 			c = split(cards(n),"|")			
 			If sBool(c(P_CARD_RESTART))=True Then			
-				Echo "Disabling " & c(P_CARD_NAME) & ": " & c(P_CARD_PNPID), False	
+				Echo "Disabling " & c(P_CARD_NAME) & ": " & c(P_CARD_PNPID), True	
 				gWshShell.Run devcon_dir & "\DEVCON.EXE disable """ & c(P_CARD_PNPID) & """", True
 				Sleep DEVCON_SLEEP
-				Echo "Enabling " & c(P_CARD_NAME) & ": " & c(P_CARD_PNPID), False
+				Echo "Enabling " & c(P_CARD_NAME) & ": " & c(P_CARD_PNPID), True
 				gWshShell.Run devcon_dir & "\DEVCON.EXE enable """ & c(P_CARD_PNPID) & """", True
 			End If
 		Next
@@ -671,8 +736,8 @@ Sub startMiner()
 		
 		If overdriventool_cmd<>"" Then
 			Echo "Applying Overdriventool Profiles", True
-			Echo "Executing Command " & overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, True
-			gWshshell.Run overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, True
+			Echo "Executing Command " & overdriventool_dir & "OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, True
+			gWshshell.Run overdriventool_dir & "OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, True
 		End If
 	
 	End If
@@ -681,7 +746,8 @@ Sub startMiner()
 	gWshShell.CurrentDirectory = scriptdir & "\" & miner_dir
 	gWshShell.Run miner_exe & " " & miner_args, 1, False
 	gWshShell.CurrentDirectory = prevdir
-	Echo "Miner Started, waiting " & timeWaitMinerStart & " seconds", True
+	Echo "Miner Started", True
+	Echo "Waiting " & timeWaitMinerStart & " seconds", False
 	Sleep timeWaitMinerStart
 	
 	date_minerstarted = now
@@ -1096,10 +1162,27 @@ Function telegramBotSend(sApiKey,sChatID,sMessage)
 	End If
  End Sub
  
- Sub EndLoop(SavePeristentData)
+ Sub EndLoop(SavePersistentData)
 	If notify_message<>"" then 		
 		sendReport notify_message
 		notify_message = ""
 	End If
 	If SavePersistentData Then WritePersistentData
  End Sub
+ 
+ Function SwitchPoolFiles()
+	On Error Resume Next
+	Dim fso	
+	If current_pool<=pool_autoswitch_limit Then dest_pool=current_pool+1 else dest_pool=0
+	Set fso = CreateObject("Scripting.FilesystemObject")
+	If fso.FileExists( scriptdir & miner_dir & "\pools." & dest_pool & ".txt") Then
+		fso.CopyFile scriptdir& miner_dir & "\pools." & dest_pool & ".txt", scriptdir & miner_dir & "\pools.txt",True
+	End If
+	If Err<>0 Then 
+		SwitchPoolFiles = False
+	Else 
+		Echo "Switched from Pool " & current_pool & " to " & dest_pool, true
+		current_pool = dest_pool
+		SwitchPoolFiles = True	
+	End If
+ End Function

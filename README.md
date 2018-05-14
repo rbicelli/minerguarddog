@@ -23,3 +23,5 @@ Before starting miner the watchdog disables then re-enables video cards and appl
 * Edit minerguarddog.ini to suit your needs, configuration is well commented so it's easy
 * Run minerguarddog.vbs as Admin or schedule at user logon with task scheduler, making sure the process is started as admin
 
+## Buy me a beer
+My XMR address is: 46un6TXVK5NF4y8URSXmMLasH9D1dnn4R3bxKFxQALk63d1EUQtECanPE9JaMUTAS7Bste12BVqE72WpTbXmweJhFspKHMg
