@@ -2,7 +2,7 @@
 ' (c) 2018 Riccardo Bicelli <r.bicelli@gmail.com>
 ' This Program is Free Software
 
-Const VERSION = "0.12.1"
+Const VERSION = "0.13.1"
 
 ' Initialization
 Const DEVCON_SLEEP = 2
@@ -35,6 +35,7 @@ Dim miner_section
 Dim hashrate_min
 Dim miner_dir, miner_exe, miner_args
 Dim hashrate_url, hashrate_checktype, hashrate_checkvalue
+Dim hashrate_avg
 Dim miner_restart_attempts
 Dim date_last_miner_restart
 Dim rig_identifier
@@ -123,7 +124,7 @@ Dim card
 Dim i,nc,m
 Dim Cards_OK, Temp_OK
 'Counters
-Dim Counter_MinerRestart, Counter_MinerPaused, Counter_SystemReboot, Counter_TempFail, Time_Start
+Dim Counter_MinerRestart, Counter_MinerPaused, Counter_SystemReboot, Counter_TempFail, Time_Start, Counter_Poolswitch
 Dim prev_sharesaccepted
 Dim date_shareacceptedchange
 Dim miner_paused
@@ -135,6 +136,9 @@ Dim date_minerpaused
 Dim Flag_cleanShutDown
 
 Counter_MinerRestart = 0
+Counter_Poolswitch = 0
+hashrate_avg=0
+
 Time_Start = Now
 miner_running = False
 ReadPersistentData
@@ -234,7 +238,12 @@ Do While True
 	
 	'Check Hashrate
 	hashrate = getHashrate(hashrate_url)	
-
+	If hashrate_avg=0 Then
+		hashrate_avg=hashrate
+	Else
+		hashrate_avg = Int( (hashrate + hashrate_avg) /2 )
+		Echo "Avg hashrate is " & hashrate_avg,False
+	End If
 	If miner_paused=False And hashrate <> "" And hashrate_min > 0 Then
 		If (hashrate < hashrate_min) then			
 				If hashrate = -1 Then
@@ -274,7 +283,8 @@ Do While True
 				Else
 					echo "Error switching pool", false
 				End If
-			End If			
+			End If
+			Echo "Mining in Pool "  & current_pool & " for " & HhMmSs(w_current_pool_time_elapsed), False
 	End If
 	
 	EndLoop True
@@ -404,34 +414,33 @@ Sub ReadConfig
 		
 End Sub
 
-Sub ReadPersistentData()
-	dim fso, f
-	Set fso=CreateObject("Scripting.FileSystemObject")
-	If (fso.FileExists(dataIniFile)=False) Then 
-		Echo "Create persistent data file " & dataIniFile, True
-		set f=fso.CreateTextFile(dataIniFile,True)
-		set f = Nothing		
-	End If
-	set fso = Nothing
-	current_pool = Int(ReadIni(dataInifile,"data","current_pool","0"))
-	current_pool_time_elapsed = Int(ReadIni(dataInifile,"data","current_pool_time_elapsed","0"))
+Sub ReadPersistentData()		
+	current_pool = Int(RegReadValue("HKCU\Software\MinerGuardDog\current_pool","0"))
+	current_pool_time_elapsed = Clng(RegReadValue("HKCU\Software\MinerGuardDog\current_pool_time_elapsed","0"))
 	w_current_pool_time_elapsed = current_pool_time_elapsed
-	Counter_SystemReboot = Int(ReadIni(dataInifile,"data","Counter_SytemReboot","0"))	
-	Flag_cleanShutDown = sBool(ReadIni(dataInifile,"data","Clean_Shutdown","true"))
+	Counter_SystemReboot = Int(RegReadValue("HKCU\Software\MinerGuardDog\Counter_SystemReboot","0"))	
+	Flag_cleanShutDown = sBool(RegReadValue("HKCU\Software\MinerGuardDog\Clean_Shutdown","true"))
 End Sub
+
+Function RegReadValue(sValue,sDefault)
+	On Error Resume Next
+	rValue = gWshShell.RegRead(sValue)
+	If Err=0 Then RegReadValue = rValue Else RegReadValue=sDefault
+End Function
 
 Sub WritePersistentData()
-	WriteIni dataIniFile,"data","Counter_SystemReboot",Counter_SystemReboot	
-	WriteIni dataIniFile,"data","current_pool_time_elapsed",w_current_pool_time_elapsed
-	WriteIni dataIniFile,"data","current_pool",current_pool	
+	'I Use Registry because INI file is unsafe
+	gWshShell.RegWrite "HKCU\Software\MinerGuardDog\Counter_SystemReboot", Counter_SystemReboot, "REG_SZ"
+	gWshShell.RegWrite "HKCU\Software\MinerGuardDog\current_pool_time_elapsed", w_current_pool_time_elapsed, "REG_SZ"
+	gWshShell.RegWrite "HKCU\Software\MinerGuardDog\current_pool", current_pool, "REG_SZ"
 End Sub
 
-Sub WriteDirtyData()
-	WriteIni dataIniFile,"data","Clean_Shutdown","false"	
+Sub WriteDirtyData()	
+	gWshShell.RegWrite "HKCU\Software\MinerGuardDog\Clean_Shutdown", "false", "REG_SZ"	
 End Sub
 
 Sub ExitClean
-	WriteIni dataIniFile,"data","Clean_Shutdown","true"
+	gWshShell.RegWrite "HKCU\Software\MinerGuardDog\Clean_Shutdown", "true", "REG_SZ"	
 	Wscript.Quit
 End Sub
 
@@ -453,23 +462,19 @@ Function getHashrate (url)
 					slen = 20
 					p2 = instr(p1,response,"</tr><tr>")					
 				End If
-				stringa = Mid(response,p1+slen,p2-p1-slen)				
+				stringa = Trim(Mid(response,p1+slen,p2-p1-slen))
 				p1=instrrev(stringa,"<td>")
 				hashrate = Right(stringa,len(stringa)-p1+1)
 				hashrate = replace(hashrate,"<td>","")
 				hashrate = trim(replace(hashrate,"</td>",""))
 				hashrate = left(hashrate, instr(1,hashrate,".")-1)
-				hashrate = int(hashrate)
-			Case "cast-xmr"
-				p1 = instr(1,response,"""total_hash_rate_avg"":")
-				p2 = instr(p1,response,",")
-				stringa = Trim(Mid(response,p1+22,p2-p1-22))
-				hashrate = int(int(stringa)/1000)
+				hashrate = int(hashrate)			
+			Case "cast-xmr"				
+				hashrate = Clng(parseJsonValue(response,"total_hash_rate_avg",1,"0")/1000)
 				'Check Shares Accepted
 				p1 = instr(1,response,"""num_accepted"":")
 				p2 = instr(p1,response,",")
-				stringa = Trim(Mid(response,p1+15,p2-p1-15))
-				echo "Shares Accepted: " & stringa,False
+				stringa = parseJsonValue(response,"num_accepted",1,"0")
 				If prev_sharesaccepted = stringa Then					
 					If timeoutExpired(date_shareacceptedchange,timeout_shareacceptedchange) Then
 						Echo "cast-xmr is not submitting hashes",True
@@ -478,13 +483,39 @@ Function getHashrate (url)
 				Else
 					date_shareacceptedchange = Now
 					prev_sharesaccepted = stringa
-				End If					
+				End If			
+			Case "srb-miner"				
+				If hashrate_checkvalue=1 Then 'Last 5 Min														
+					hashrate = clng(parseJsonValue(response,"hashrate_total_5min",1,"0"))
+				Else 'Last 30m					
+					hashrate = clng(parseJsonValue(response,"hashrate_total_30min",1,"0"))
+				End If
+				stringa = parseJsonValue(response,"accepted",1,"0")
+				If prev_sharesaccepted = stringa Then					
+					If timeoutExpired(date_shareacceptedchange,timeout_shareacceptedchange) Then
+						Echo "srb-miner is not submitting hashes",True
+						hashrate = -1
+					End If
+				Else
+					date_shareacceptedchange = Now
+					prev_sharesaccepted = stringa
+				End If
 		End Select
 	else		
 		hashrate = -1
 	end if
 
 	getHashrate = hashrate
+End Function
+
+Function parseJsonValue(sJson,sKey,iStart,sDefault)
+	Dim p1,p2,sl,sresp
+	sKey = """" & sKey & """:"
+	sl = len(sKey)	
+	p1 = instr(iStart,sJson,sKey)
+	p2 = instr(p1,sJson,",")
+	sresp = Trim(Mid(sJson,p1+sl,p2-p1-sl))
+	If sresp="" Then ParseJsonValue = sDefault Else parseJsonValue=sresp
 End Function
 
 Function getUrl (url)
@@ -1162,12 +1193,16 @@ Function telegramBotSend(sApiKey,sChatID,sMessage)
 	End If
  End Sub
  
- Sub EndLoop(SavePersistentData)
+ Sub sendPeriodicReport()
+	sMessage = "Rig ID: " & rig_identifier & VbCrLf
+ End Sub
+ 
+ Sub EndLoop(SaveData)
 	If notify_message<>"" then 		
 		sendReport notify_message
 		notify_message = ""
 	End If
-	If SavePersistentData Then WritePersistentData
+	If SaveData Then WritePersistentData
  End Sub
  
  Function SwitchPoolFiles()
@@ -1185,4 +1220,18 @@ Function telegramBotSend(sApiKey,sChatID,sMessage)
 		current_pool = dest_pool
 		SwitchPoolFiles = True	
 	End If
+ End Function
+ 
+ Function HhMmSs(TimeInSeconds)	
+	Dim Hrs, Minutes, Seconds, StrRet
+	strRet = ""
+	Hrs = Int(TimeInSeconds / 3600)
+	Minutes = (Int(TimeInSeconds / 60)) - (Hrs * 60)
+    Seconds = Int(TimeInSeconds Mod 60)
+
+	If Hrs > 0 Then StrRet = Hrs & "h "
+	If Minutes > 0 Or (Hrs > 0 And Minutes > 0 And Seconds > 0) Then StrRet = StrRet & Minutes & "m " 
+	If Seconds >0 Then StrRet = StrRet & Seconds & "s"
+	
+	HhMmSs = StrRet
  End Function

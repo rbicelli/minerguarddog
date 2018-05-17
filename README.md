@@ -1,7 +1,7 @@
 # MinerGuardDog
 Miner watchdog for Windows, compatible with [xmr-stak](https://github.com/fireice-uk/xmr-stak) and [cast-xmr](http://www.gandalph3000.com/)
 
-Mining with RX Vegas in Windows could be a PITA. You have always to check if everything is running fine and sometimes cross fingers.
+Mining with AMG GPUs in Windows could be a PITA. You have always to check if everything is running fine and sometimes cross fingers.
 
 This watchdog comes in help:
 * Checks if miner process is running and responding, otherwise the watchdog restars it
