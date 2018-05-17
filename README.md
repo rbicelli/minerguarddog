@@ -2,7 +2,7 @@
 Miner watchdog for Windows, compatible with 
 * [xmr-stak](https://github.com/fireice-uk/xmr-stak)
 * [cast-xmr](http://www.gandalph3000.com/)
-* [srb-miner] (https://bitcointalk.org/index.php?topic=3167363.0)
+* [srb-miner](https://bitcointalk.org/index.php?topic=3167363.0)
 
 Mining with AMD GPUs in Windows could be a PITA. You have always to check if everything is running fine and sometimes cross fingers.
 
