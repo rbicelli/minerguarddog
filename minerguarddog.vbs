@@ -2,7 +2,7 @@
 ' (c) 2018 Riccardo Bicelli <r.bicelli@gmail.com>
 ' This Program is Free Software
 
-Const VERSION = "0.13.1"
+Const VERSION = "0.14.1"
 
 ' Initialization
 Const DEVCON_SLEEP = 2
@@ -15,12 +15,17 @@ Const P_CARD_NAME = 0
 Const P_CARD_COUNT = 1
 Const P_CARD_RESTART = 2
 Const P_CARD_PNPID = 3
-Const P_CARD_INDEXES = 4
-Const P_CARD_OTPROFILE = 5
-Const P_CARD_OTOVERRIDES = 6
-Const P_CARD_OTPROFILE_T = 7
-Const P_CARD_OTOVERRIDES_T = 8
-Const P_CARD_TEMP_LIMIT = 9
+Const P_CARD_ALL_PNPIDS = 4
+Const P_CARD_INDEXES = 5
+Const P_CARD_OTPROFILE = 6
+Const P_CARD_OTOVERRIDES = 7
+Const P_CARD_OTPROFILE_T = 8
+Const P_CARD_OTOVERRIDES_T = 9
+Const P_CARD_TEMP_LIMIT = 10
+
+'Registry Constants
+Const REG_KEY_DISPLAYADAPTERS = "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+Const REG_KEY_PERSITENTDATA = "HKCU\Software\MinerGuardDog\"
 
 ' Timings
 Dim timeWaitStart, timeWaitReboot, timeWaitMinerStart, timeSleepCycle, timeoutMinerRestartReset
@@ -33,7 +38,7 @@ Dim logfile
 'Miner
 Dim miner_section
 Dim hashrate_min
-Dim miner_dir, miner_exe, miner_args
+Dim miner_dir, miner_exe, miner_args, miner_bat
 Dim hashrate_url, hashrate_checktype, hashrate_checkvalue
 Dim hashrate_avg
 Dim miner_restart_attempts
@@ -69,6 +74,9 @@ Dim cards()
 Dim cards_TempOK()
 Dim Cards_NumOK()
 ReDim appliedTimedProfiles(0)
+
+'Options
+Dim option_apply_amd_tweaks
 
 forceCScriptExecution
 
@@ -115,6 +123,11 @@ Echo "Waiting " & timeWaitStart & " seconds before starting watchdog", False
 Sleep timeWaitStart
 
 Echo "Starting Watchdog", True
+
+'Apply AMD Tweaks
+If isArray(cards)=True And option_apply_amd_tweaks = True Then 
+	if ApplyAMDTweaks Then RebootSystem timeWaitReboot
+End If
 
 miner_paused = False
 date_minerstarted = Now
@@ -314,6 +327,7 @@ Sub ReadConfig
 	'Miner Executable
 	miner_dir = ReadIni(IniFile,miner_section,"directory","")
 	miner_exe = ReadIni(IniFile,miner_section,"executable","")
+	miner_bat = ReadIni(IniFile,miner_section,"launcher","")
 	miner_args = ReadIni(IniFile,miner_section,"args","")		
 
 	'URL for hashrate check, please check your port configuration in xmr-stak
@@ -403,6 +417,9 @@ Sub ReadConfig
 	maxMinerRestartAttempts = ReadIni(IniFile,"global","max_miner_restart_attempts", 3)
 		
 	monitor_only = sBool(ReadIni(IniFile,"global","monitor_only", false))
+	
+	'Options
+	option_apply_amd_tweaks = Sbool(ReadIni(IniFile,"global","apply_amd_tweaks", "false"))	
 		
 	'Notifications
 	rig_identifier = ReadIni(Inifile,"global","rig_identifier","My Rig")
@@ -415,24 +432,48 @@ Sub ReadConfig
 End Sub
 
 Sub ReadPersistentData()		
-	current_pool = Int(RegReadValue("HKCU\Software\MinerGuardDog\current_pool","0"))
-	current_pool_time_elapsed = Clng(RegReadValue("HKCU\Software\MinerGuardDog\current_pool_time_elapsed","0"))
+	current_pool = Int(RegReadValue(REG_KEY_PERSITENTDATA & "current_pool","0"))
+	current_pool_time_elapsed = Clng(RegReadValue(REG_KEY_PERSITENTDATA & "current_pool_time_elapsed","0"))
 	w_current_pool_time_elapsed = current_pool_time_elapsed
-	Counter_SystemReboot = Int(RegReadValue("HKCU\Software\MinerGuardDog\Counter_SystemReboot","0"))	
-	Flag_cleanShutDown = sBool(RegReadValue("HKCU\Software\MinerGuardDog\Clean_Shutdown","true"))
+	Counter_SystemReboot = Int(RegReadValue(REG_KEY_PERSITENTDATA & "Counter_SystemReboot","0"))	
+	Flag_cleanShutDown = sBool(RegReadValue(REG_KEY_PERSITENTDATA & "Clean_Shutdown","true"))
 End Sub
 
 Function RegReadValue(sValue,sDefault)
 	On Error Resume Next
+	rValue = gWshShell.RegRead(sValue)	
+	If Err<>0 Then 
+		RegReadValue = sDefault
+	Else
+		If rValue="" Or IsNull(value)  Or  IsEmpty(value) Then
+			RegReadValue=sDefault
+		Else
+			RegReadValue=rValue
+		End If		
+	End If
+End Function
+
+Function RegChangeValue(sValue,sType,sNewValue,bMustExist)
+	On Error Resume Next
+	RegChangeValue = False
 	rValue = gWshShell.RegRead(sValue)
-	If Err=0 Then RegReadValue = rValue Else RegReadValue=sDefault
+	If Err <> 0 And bMustExist=True Then Exit Function
+	
+	If rValue = sNewValue Then Exit Function
+	
+	gWshShell.RegWrite sValue, sNewValue, sType
+	If Err<> 0 Then
+		Echo "Error Writing to registry Key " & sValue, True
+	Else
+		RegChangeValue = True
+	End If	
 End Function
 
 Sub WritePersistentData()
-	'I Use Registry because INI file is unsafe
-	gWshShell.RegWrite "HKCU\Software\MinerGuardDog\Counter_SystemReboot", Counter_SystemReboot, "REG_SZ"
-	gWshShell.RegWrite "HKCU\Software\MinerGuardDog\current_pool_time_elapsed", w_current_pool_time_elapsed, "REG_SZ"
-	gWshShell.RegWrite "HKCU\Software\MinerGuardDog\current_pool", current_pool, "REG_SZ"
+	'I Use Registry because INI file is unreliable
+	gWshShell.RegWrite REG_KEY_PERSITENTDATA & "Counter_SystemReboot", Counter_SystemReboot, "REG_SZ"
+	gWshShell.RegWrite REG_KEY_PERSITENTDATA & "current_pool_time_elapsed", w_current_pool_time_elapsed, "REG_SZ"
+	gWshShell.RegWrite REG_KEY_PERSITENTDATA & "current_pool", current_pool, "REG_SZ"
 End Sub
 
 Sub WriteDirtyData()	
@@ -555,29 +596,33 @@ End Function
 
 Function detectCardsData(strName)
 On Error Resume Next
-	Dim ci, card_indexes, pnp_id, oWMI
+	Dim ci, card_indexes, pnp_id, oWMI, pnp_allids
 	Set oWMI = GetObject("winmgmts:\\.\root\cimv2")
 	ci = 0
 	card_indexes = ""
 	pnp_id = ""
+	pnp_allids = ""
 	Set colItems = oWMI.ExecQuery ("Select * from Win32_VideoController")
 	For Each objItem in colItems		
 		If lcase(objItem.Name)=lcase(strname) Then			
 			'Add Index
 			card_indexes = card_indexes & ci & ","
+			'All pnp device id
+			pnp_allids = pnp_allids & objItem.PNPDeviceID & " "
 			If pnp_id="" Then
 				'Detect PNP ID for Devcon
 				pnp_id = objItem.PNPDeviceID				
 				p1 = instr(1,pnp_id,"&")
 				p2 = instr(p1+1,pnp_id,"&")								
 				pnp_id = left(pnp_id,p2-1)
-			End If
+			End If						
 		End If
 		ci = ci + 1
 	Next
 	If card_indexes<>"" then 
 		card_indexes = stripLastChar(card_indexes)
-		detectCardsData = pnp_id '& "|" & card_indexes
+		pnp_allids = stripLastChar(pnp_allids)
+		detectCardsData = pnp_id & "|" & pnp_allids '& "|" & card_indexes
 	End If
 End Function
 
@@ -775,7 +820,11 @@ Sub startMiner()
 	
 	prevdir = gWshShell.CurrentDirectory
 	gWshShell.CurrentDirectory = scriptdir & "\" & miner_dir
-	gWshShell.Run miner_exe & " " & miner_args, 1, False
+	if miner_bat<>"" Then
+		gWshShell.Run miner_bat, 1, False
+	Else
+		gWshShell.Run miner_exe & " " & miner_args, 1, False
+	End If
 	gWshShell.CurrentDirectory = prevdir
 	Echo "Miner Started", True
 	Echo "Waiting " & timeWaitMinerStart & " seconds", False
@@ -1235,3 +1284,75 @@ Function telegramBotSend(sApiKey,sChatID,sMessage)
 	
 	HhMmSs = StrRet
  End Function
+ 
+ Function ApplyAMDTweaks
+	dim cardPNPId, regKey, cardName, cardDriver, cardSwEd, cardSwVer
+			
+	Dim bTweaked
+	bTweaked = False
+	
+	For m = 0 to 100 'Too lazy for enumerating subkeys
+		regKey = REG_KEY_DISPLAYADAPTERS & "\" & lpad(m,4,"0") & "\"
+		cardPNPId = RegReadValue(RegKey & "MatchingDeviceId","")
+					
+		If isPnpIdInCards(cardPNPId) Then
+			cardName = RegReadValue(RegKey & "DriverDesc","")
+			cardSwEd = lcase(RegReadValue(RegKey & "RadeonSoftwareEdition",""))
+			cardSwVer = lcase(RegReadValue(RegKey & "RadeonSoftwareVersion",""))
+	
+			If cardSwEd = "crimson" And cardSwVer = "beta" Then
+			
+				Echo "AMD Blockchain driver detected", False
+				Echo "GPU " & cardName & " found (" & CardPNPId & ")", False
+								
+				If RegChangeValue(RegKey & "EnableCrossFireAutoLink","REG_DWORD",0,True) Then
+					Echo "Crossfire disabled for " & cardName & " (" & cardPNPId & ")", True
+					bTweaked = True								
+				End If
+								
+				If RegChangeValue(RegKey & "EnableUlps","REG_DWORD",0,True) Then
+					Echo "ULPS disabled for " & cardName & " (" & cardPNPId & ")", True
+					bTweaked = True								
+				End If
+				
+			End If
+			
+		End If
+	Next
+	ApplyAMDTweaks = bTweaked	
+End Function
+
+Function ApplyOsTweaks
+	ApplyOsTweaks = False
+	
+End Function
+ 
+Function LPad(s, l, c)
+  Dim n : n = 0
+  If l > Len(s) Then n = l - Len(s)
+  LPad = String(n, c) & s
+End Function
+
+Function isPnpIdInCards(sPnpId)
+	dim i, card, pnp_id, rev
+	isPnpIdInCards = False
+	
+	if sPnpId="" Then Exit Function
+	
+	For i = 0 to ubound(cards)
+		card = split(cards(i),"|")
+		pnp_ids = split(card(P_CARD_ALL_PNPIDS)," ")
+		For n=0 To ubound(pnp_ids)
+			p1 = instr(1,pnp_ids(n),"REV")
+			p2 = instr(p1,pnp_ids(n),"\")
+			rev = mid(pnp_ids(n),p1,p2-p1)
+			p1 = instr(1,pnp_ids(n),"DEV")
+			p2 = instr(p1,pnp_ids(n),"&")
+			pnp_id =  left(pnp_ids(n),p2) & rev			
+			If lcase(pnp_id) = lcase(sPnpId) Then
+				isPnpIdInCards = True
+				Exit For
+			End If
+		Next
+	Next
+End Function

@@ -12,6 +12,7 @@ This watchdog comes in help:
 * Checks for hashrate drops, otherwise the watchdog restars the miner
 * Checks temperatures of your cards, in case temperature raises above limit you set it pauses miner, reboot or shutdown system according to settings
 * Auto detect cards, run devcon disable/enable, and applies Overdriventool profiles. You can schedule to apply profiles after miner is started. See example INI file for better explaination
+* Auto disable Crossfire and Ulps in Registry
 * Round-Robin rig sharing in xmr-stak (see Example INI file)
 * Send Telegram Notifications
 
