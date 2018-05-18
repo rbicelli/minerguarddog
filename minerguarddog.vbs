@@ -445,7 +445,7 @@ Function RegReadValue(sValue,sDefault)
 	If Err<>0 Then 
 		RegReadValue = sDefault
 	Else
-		If rValue="" Or IsNull(value)  Or  IsEmpty(value) Then
+		If rValue="" Or IsNull(sValue)  Or  IsEmpty(sValue) Then
 			RegReadValue=sDefault
 		Else
 			RegReadValue=rValue
