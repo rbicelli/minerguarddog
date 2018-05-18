@@ -2,7 +2,7 @@
 ' (c) 2018 Riccardo Bicelli <r.bicelli@gmail.com>
 ' This Program is Free Software
 
-Const VERSION = "0.14.1"
+Const VERSION = "0.15.1"
 
 ' Initialization
 Const DEVCON_SLEEP = 2
@@ -41,11 +41,12 @@ Dim hashrate_min
 Dim miner_dir, miner_exe, miner_args, miner_bat
 Dim hashrate_url, hashrate_checktype, hashrate_checkvalue
 Dim hashrate_avg
-Dim miner_restart_attempts
 Dim date_last_miner_restart
+Dim date_scriptstart
 Dim rig_identifier
 Dim pool_autoswitch
 Dim pool_autoswitch_time
+Dim flag_firststart
 
 Dim current_pool
 Dim current_pool_time_elapsed
@@ -66,6 +67,8 @@ Dim timeout_shareacceptedchange, timeout_templimit
 Dim notifications
 Dim telegram_api_key, telegram_chat_id
 Dim notify_message
+Dim auto_report_interval
+Dim date_lastreport
 
 Dim scriptdir
 Dim gWshShell
@@ -91,6 +94,9 @@ gWshShell.CurrentDirectory = scriptdir
 ' Read Configuration from INI File
 ReadConfig
 notify_message = ""
+
+flag_firststart = True
+date_scriptstart = Now
 
 Echo "MinerGuardDog Version " & VERSION, True
 
@@ -131,6 +137,7 @@ End If
 
 miner_paused = False
 date_minerstarted = Now
+date_lastreport = Now
 
 ' Main Loop
 Dim card
@@ -149,7 +156,9 @@ Dim date_minerpaused
 Dim Flag_cleanShutDown
 
 Counter_MinerRestart = 0
+Counter_MinerPaused = 0
 Counter_Poolswitch = 0
+Counter_TempFail = 0
 hashrate_avg=0
 
 Time_Start = Now
@@ -189,7 +198,8 @@ Do While True
 				For m=0 To ubound(Temps)					
 					If int(Temps(m)) > int(card(P_CARD_TEMP_LIMIT)) Then						
 						Echo card(P_CARD_NAME) & ":" & m & " Temperatures over threshold " & Temps(m) & "/" & card(P_CARD_TEMP_LIMIT), Cards_TempOK(i)
-						Temp_OK = False						
+						If Cards_TempOK(i)=True Then Counter_TempFail = Counter_TempFail + 1
+						Temp_OK = False				
 						If monitor_only=False then
 							Select Case temp_fail_action
 								case "pause-miner"
@@ -228,8 +238,7 @@ Do While True
 			Echo "Miner process not running or not responding", True
 			If monitor_only=False Then
 				If killMiner(miner_exe)=True Then 
-					startMiner 
-					Counter_MinerRestart = Counter_MinerRestart + 1
+					startMiner					
 				Else 
 					Echo "Unable to kill miner", True
 					rebootSystem timeWaitReboot
@@ -251,13 +260,15 @@ Do While True
 	
 	'Check Hashrate
 	hashrate = getHashrate(hashrate_url)	
+	if hashrate = "" Then hashrate = 0
+	
 	If hashrate_avg=0 Then
 		hashrate_avg=hashrate
 	Else
 		hashrate_avg = Int( (hashrate + hashrate_avg) /2 )
-		Echo "Avg hashrate is " & hashrate_avg,False
+		Echo "Avg hashrate is " & hashrate_avg, False
 	End If
-	If miner_paused=False And hashrate <> "" And hashrate_min > 0 Then
+	If miner_paused=False And hashrate<>0 And hashrate <> "" And hashrate_min > 0 Then
 		If (hashrate < hashrate_min) then			
 				If hashrate = -1 Then
 					Echo "Miner seems crashed", False
@@ -285,10 +296,12 @@ Do While True
 				'Switch Pool
 				Echo "Switching from pool " & current_pool, True
 				If SwitchPoolFiles Then										
+					date_minerstarted=now
 					current_pool_time_elapsed = 0
 					w_current_pool_time_elapsed = 0
 					If killMiner(miner_exe) Then						
 						startMiner
+						Counter_Poolswitch = Counter_Poolswitch + 1
 					Else
 						Echo "Unable to kill miner. Rebooting", True
 						RebootSystem timeWaitReboot
@@ -299,8 +312,10 @@ Do While True
 			End If
 			Echo "Mining in Pool "  & current_pool & " for " & HhMmSs(w_current_pool_time_elapsed), False
 	End If
-	
+		
 	EndLoop True
+	
+	if flag_firststart = True Then flag_firststart = False
 	Sleep timeSleepCycle
 Loop
 ' End Of Main Loop
@@ -424,6 +439,7 @@ Sub ReadConfig
 	'Notifications
 	rig_identifier = ReadIni(Inifile,"global","rig_identifier","My Rig")
 	notifications = ReadIni(Inifile,"global","notifications","disabled")
+	auto_report_interval = Int(ReadIni(Inifile,"global","auto_report_interval","0"))
 	If notifications="telegram" Then
 		telegram_api_key = ReadIni(IniFile,"notifications.telegram","api_key","")
 		telegram_chat_id = ReadIni(IniFile,"notifications.telegram","chat_id","")
@@ -830,6 +846,12 @@ Sub startMiner()
 	Echo "Waiting " & timeWaitMinerStart & " seconds", False
 	Sleep timeWaitMinerStart
 	
+	If flag_firststart = False Then
+		current_pool_time_elapsed = datediff("s", date_minerstarted, now) + current_pool_time_elapsed
+		date_minerstarted = now
+		date_last_miner_restart = Now
+		Counter_MinerRestart = Counter_MinerRestart + 1
+	End If
 	date_minerstarted = now
 	'Reset Counters
 	resetCounters
@@ -1242,15 +1264,12 @@ Function telegramBotSend(sApiKey,sChatID,sMessage)
 	End If
  End Sub
  
- Sub sendPeriodicReport()
-	sMessage = "Rig ID: " & rig_identifier & VbCrLf
- End Sub
- 
  Sub EndLoop(SaveData)
 	If notify_message<>"" then 		
 		sendReport notify_message
 		notify_message = ""
 	End If
+	sendPeriodicReport
 	If SaveData Then WritePersistentData
  End Sub
  
@@ -1356,3 +1375,20 @@ Function isPnpIdInCards(sPnpId)
 		Next
 	Next
 End Function
+
+Sub SendPeriodicReport
+	Dim sMessage
+	if auto_report_interval > 0 and notifications<>"" and datediff("s",date_lastreport, now)> (auto_report_interval * 60) Then
+		sMessage = "Rig ID: " & rig_identifier & vbCrlf & _
+				"Avg Hashrate: " & hashrate_avg & vbCrlf & _ 
+				"Watchdog Uptime: " & HhMmSs(datediff("s",date_scriptstart,now)) & vbCrlf
+		If Counter_MinerRestart > 0 Then sMessage = sMessage & "Miner Restarts Count: " & Counter_MinerRestart & vbCrlf 
+		If Counter_MinerPaused > 0 Then sMessage = sMessage & "Miner Pause Count: " & Counter_MinerPaused & vbCrlf
+		If Counter_TempFail > 0 Then sMessage = sMessage & "GPU Temp Fail Count: " & Counter_TempFail & vbCrlf
+		If notifications="telegram" Then
+			Echo "Sending Auto-Report", False
+			telegramBotSend telegram_api_key, telegram_chat_id, sMessage
+		End If
+		date_lastreport = now
+End If
+End Sub
