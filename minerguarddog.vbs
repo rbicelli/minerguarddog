@@ -2,7 +2,7 @@
 ' (c) 2018 Riccardo Bicelli <r.bicelli@gmail.com>
 ' This Program is Free Software
 
-Const VERSION = "0.15.1"
+Const VERSION = "0.15.2"
 
 ' Initialization
 Const DEVCON_SLEEP = 5
@@ -284,7 +284,7 @@ Do While True
 				If hashrate_read_count>=HASHRATE_HISTERESIS Then bRestartMiner = True
 				
 				If hashrate = -1 Then
-					Echo "Miner seems crashed", True
+					Echo "Miner seems crashed", bRestartMiner
 				Else
 					Echo "Hashrate drop detected (" & hashrate & "/" & hashrate_min & ")", bRestartMiner
 				End If
@@ -319,8 +319,10 @@ Do While True
 					If killMiner(miner_exe) Then						
 						startMiner
 						Counter_Poolswitch = Counter_Poolswitch + 1
+						'Don't considere it a true restart
+						Counter_MinerRestart = Counter_MinerRestart - 1
 					Else
-						Echo "Unable to kill miner. Rebooting", True
+						Echo "Unable to kill miner", True
 						RebootSystem timeWaitReboot
 					End If 
 				Else
@@ -1410,12 +1412,17 @@ Sub SendPeriodicReport
 		sMessage = "Rig ID: " & rig_identifier & vbCrlf & _
 				"Avg Hashrate: " & hashrate_avg & vbCrlf & _ 
 				"Watchdog Uptime: " & HhMmSs(datediff("s",date_scriptstart,now)) & vbCrlf & _
-				"Miner Uptime: " & HhMmSs(datediff("s",date_minerstarted,now)) & vbCrlf &  _
-				"Current Pool: " & current_pool & vbCrlf
+				"Miner Uptime: " & HhMmSs(datediff("s",date_minerstarted,now)) & vbCrlf 
+				
+		If pool_autoswitch=True Then
+			sMessage = sMessage & "Current Pool: " & current_pool & vbCrlf & _
+				"Current Pool Mining Time: " & HhMmSs(w_current_pool_time_elapsed) & vbcrlf 
+			If Counter_Poolswitch > 0 Then sMessage = sMessage & "Pool Switch Count: " & Counter_Poolswitch & vbCrlf
+		End If
+		
 		If Counter_MinerRestart > 0 Then sMessage = sMessage & "Miner Restarts Count: " & Counter_MinerRestart & vbCrlf 
 		If Counter_MinerPaused > 0 Then sMessage = sMessage & "Miner Pause Count: " & Counter_MinerPaused & vbCrlf
 		If Counter_TempFail > 0 Then sMessage = sMessage & "GPU Temp Fail Count: " & Counter_TempFail & vbCrlf
-		If Counter_Poolswitch > 0 Then sMessage = sMessage & "Pool Switch Count: " & Counter_Poolswitch & vbCrlf
 		
 		If notifications="telegram" Then
 			Echo "Sending Auto-Report", False
