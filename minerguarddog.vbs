@@ -33,7 +33,7 @@ Dim timeWaitStart, timeWaitReboot, timeWaitMinerStart, timeSleepCycle, timeoutMi
 Dim maxMinerRestartAttempts
 
 'Ini File Variables
-Dim IniFile, dataIniFile
+Dim IniFile
 Dim logfile
 
 'Miner
@@ -90,7 +90,6 @@ forceCScriptExecution
 scriptdir = replace(WScript.ScriptFullName,WScript.ScriptName,"")
 
 IniFile = scriptdir & "minerguarddog.ini"
-DataIniFile = scriptdir & "minerguarddog.dat"
 
 Set gWshShell = CreateObject("WScript.Shell")
 gWshShell.CurrentDirectory = scriptdir
@@ -134,11 +133,6 @@ Sleep timeWaitStart
 
 Echo "Starting Watchdog", True
 
-'Apply AMD Tweaks
-If isArray(cards)=True And option_apply_amd_tweaks = True Then 
-	if ApplyAMDTweaks Then RebootSystem timeWaitReboot
-End If
-
 miner_paused = False
 date_minerstarted = Now
 date_lastreport = Now
@@ -155,7 +149,7 @@ Dim miner_paused
 Dim miner_running
 Dim date_minerstarted
 Dim date_minerpaused
-Dim hashrate_read_count
+Dim hashratedrop_readcount
 
 'Flags
 Dim Flag_cleanShutDown
@@ -167,7 +161,7 @@ Counter_MinerPaused = 0
 Counter_Poolswitch = 0
 Counter_TempFail = 0
 hashrate_avg=0
-hashrate_read_count=0
+hashratedrop_readcount=0
 
 Time_Start = Now
 miner_running = False
@@ -179,6 +173,11 @@ If Flag_cleanShutDown = False Then
 End If
 
 WriteDirtyData
+
+'Apply AMD Tweaks
+If isArray(cards)=True And option_apply_amd_tweaks = True Then 
+	if ApplyAMDTweaks Then RebootSystem timeWaitReboot
+End If
 
 Do While True
 	'Check Cards
@@ -275,13 +274,13 @@ Do While True
 	If hashrate_avg=0 Then
 		hashrate_avg=hashrate
 	Else
-		hashrate_avg = Int( (hashrate + hashrate_avg) /2 )
+		if hashrate_avg<0 Then hashrate_avg = Int( (hashrate + hashrate_avg) /2 )
 		Echo "Avg hashrate is " & hashrate_avg, False
 	End If
 	If miner_paused=False And hashrate<>0 And hashrate <> "" And hashrate_min > 0 Then
 		If (hashrate < hashrate_min) then			
-				hashrate_read_count = hashrate_read_count + 1
-				If hashrate_read_count>=HASHRATE_HISTERESIS Then bRestartMiner = True
+				hashratedrop_readcount = hashratedrop_readcount + 1
+				If hashratedrop_readcount>=HASHRATE_HISTERESIS Then bRestartMiner = True
 				
 				If hashrate = -1 Then
 					Echo "Miner seems crashed", bRestartMiner
@@ -301,7 +300,7 @@ Do While True
 				End If
 		
 		Else			
-			hashrate_read_count = 0
+			hashratedrop_readcount = 0
 			Echo "Hashrate is normal (" & hashrate & "/" & hashrate_min & ")", False
 		End If
 	End If
@@ -635,12 +634,13 @@ End Function
 
 Function detectCardsData(strName)
 On Error Resume Next
-	Dim ci, card_indexes, pnp_id, oWMI, pnp_allids
+	Dim ci, card_indexes, pnp_id, oWMI, pnp_allids, pnp_ids
 	Set oWMI = GetObject("winmgmts:\\.\root\cimv2")
 	ci = 0
 	card_indexes = ""
 	pnp_id = ""
-	pnp_allids = ""
+	pnp_ids = ""
+	pnp_allids = ""	
 	Set colItems = oWMI.ExecQuery ("Select * from Win32_VideoController")
 	For Each objItem in colItems		
 		If lcase(objItem.Name)=lcase(strname) Then			
@@ -648,20 +648,24 @@ On Error Resume Next
 			card_indexes = card_indexes & ci & ","
 			'All pnp device id
 			pnp_allids = pnp_allids & objItem.PNPDeviceID & " "
-			If pnp_id="" Then
-				'Detect PNP ID for Devcon
-				pnp_id = objItem.PNPDeviceID				
-				p1 = instr(1,pnp_id,"&")
-				p2 = instr(p1+1,pnp_id,"&")								
-				pnp_id = left(pnp_id,p2-1)
-			End If						
+						
+			'Detect PNP ID for Devcon
+			pnp_id = objItem.PNPDeviceID				
+			p1 = instr(1,pnp_id,"&")
+			p2 = instr(p1+1,pnp_id,"&")								
+			pnp_id = left(pnp_id,p2-1)
+			If instr(1,pnp_ids,pnp_id)=0 Then
+				pnp_ids = pnp_ids & pnp_id & ","
+			End If
+			
 		End If
 		ci = ci + 1
 	Next
 	If card_indexes<>"" then 
 		card_indexes = stripLastChar(card_indexes)
 		pnp_allids = stripLastChar(pnp_allids)
-		detectCardsData = pnp_id & "|" & pnp_allids '& "|" & card_indexes
+		pnp_ids = stripLastChar(pnp_ids)
+		detectCardsData = pnp_ids & "|" & pnp_allids '& "|" & card_indexes
 	End If
 	If Err<>0 Then Err.Clear
 End Function
@@ -717,7 +721,7 @@ Sub RebootSystem(SleepSecs)
 	Set objWMIService = GetObject("winmgmts:{impersonationLevel=impersonate,(Shutdown)}!\\.\root\cimv2")
 	If cmd_run_before_reboot<>"" Then
 		Echo "Executing Command " & cmd_run_before_reboot, True
-		gWshShell.Run cmd_run_before_reboot,0,True	
+		gWshShell.Run cmd_run_before_reboot, 0, True	
 	End If
 	Set colOperatingSystems = objWMIService.ExecQuery("Select * from Win32_OperatingSystem")
 	For Each objOperatingSystem in colOperatingSystems
@@ -817,6 +821,7 @@ Sub startMiner()
 	Dim ot_or, ot_ori, idx
 	Dim prevdir
 	Dim c, card_profile
+	Dim i,pnpids
 	
 	overdriventool_cmd = ""
 	
@@ -826,13 +831,16 @@ Sub startMiner()
 			c = split(cards(n),"|")			
 			Echo c(P_CARD_NAME) & ": Restarting", True
 			If sBool(c(P_CARD_RESTART))=True Then			
-				Echo "Disabling " & c(P_CARD_NAME) & ": " & c(P_CARD_PNPID), True	
-				gWshShell.Run devcon_dir & "\DEVCON.EXE disable """ & c(P_CARD_PNPID) & """", True
-				Sleep DEVCON_SLEEP * 2
-				Echo "Enabling " & c(P_CARD_NAME) & ": " & c(P_CARD_PNPID), True
-				gWshShell.Run devcon_dir & "\DEVCON.EXE enable """ & c(P_CARD_PNPID) & """", True
-				Echo "Waiting Devices to settle", False
-				Sleep DEVCON_SLEEP
+				pnpids = split(c(P_CARD_PNPID),",")
+				For i=0 To ubound(pnpids)
+					Echo "Disabling " & c(P_CARD_NAME) & ": " & pnpids(i), True	
+					gWshShell.Run devcon_dir & "\DEVCON.EXE disable """ & pnpids(i) & """", True
+					Sleep DEVCON_SLEEP * 2
+					Echo "Enabling " & c(P_CARD_NAME) & ": " & pnpids(i), True
+					gWshShell.Run devcon_dir & "\DEVCON.EXE enable """ & pnpids(i) & """", True
+					Echo "Waiting Devices to settle", False
+					Sleep DEVCON_SLEEP
+				Next
 			End If
 		Next
 				
@@ -1322,6 +1330,7 @@ Function telegramBotSend(sApiKey,sChatID,sMessage)
  
  Function HhMmSs(TimeInSeconds)	
 	Dim Hrs, Minutes, Seconds, StrRet
+	
 	strRet = ""
 	Hrs = Int(TimeInSeconds / 3600)
 	Minutes = (Int(TimeInSeconds / 60)) - (Hrs * 60)
@@ -1372,8 +1381,7 @@ Function telegramBotSend(sApiKey,sChatID,sMessage)
 End Function
 
 Function ApplyOsTweaks
-	ApplyOsTweaks = False
-	
+	ApplyOsTweaks = False	
 End Function
  
 Function LPad(s, l, c)
@@ -1413,21 +1421,22 @@ Sub SendPeriodicReport
 				"Avg Hashrate: " & hashrate_avg & vbCrlf & _ 
 				"Watchdog Uptime: " & HhMmSs(datediff("s",date_scriptstart,now)) & vbCrlf & _
 				"Miner Uptime: " & HhMmSs(datediff("s",date_minerstarted,now)) & vbCrlf 
-				
+		
 		If pool_autoswitch=True Then
 			sMessage = sMessage & "Current Pool: " & current_pool & vbCrlf & _
 				"Current Pool Mining Time: " & HhMmSs(w_current_pool_time_elapsed) & vbcrlf 
 			If Counter_Poolswitch > 0 Then sMessage = sMessage & "Pool Switch Count: " & Counter_Poolswitch & vbCrlf
 		End If
-		
+
 		If Counter_MinerRestart > 0 Then sMessage = sMessage & "Miner Restarts Count: " & Counter_MinerRestart & vbCrlf 
 		If Counter_MinerPaused > 0 Then sMessage = sMessage & "Miner Pause Count: " & Counter_MinerPaused & vbCrlf
 		If Counter_TempFail > 0 Then sMessage = sMessage & "GPU Temp Fail Count: " & Counter_TempFail & vbCrlf
-		
+
 		If notifications="telegram" Then
 			Echo "Sending Auto-Report", False
 			telegramBotSend telegram_api_key, telegram_chat_id, sMessage
 		End If
 		date_lastreport = now
-End If
+	End If
 End Sub
+

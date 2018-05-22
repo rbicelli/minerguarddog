@@ -7,7 +7,7 @@ Miner watchdog for Windows, compatible with
 Mining with AMD GPUs in Windows could be a PITA. You have always to check if everything is running fine and sometimes cross fingers.
 
 This watchdog comes in help:
-* Checks if miner process is running and responding, otherwise the watchdog restars it
+* Checks if miner process is running and responding, otherwise the watchdog restarts it
 * Checks if video cards are present (sometimes a Vega "disappears" from system), otherwise the watchdog reboots System
 * Checks for hashrate drops, otherwise the watchdog restars the miner
 * Checks temperatures of your cards, in case temperature raises above limit you set it pauses miner, reboot or shutdown system according to settings
