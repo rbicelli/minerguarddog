@@ -2,7 +2,7 @@
 ' (c) 2018 Riccardo Bicelli <r.bicelli@gmail.com>
 ' This Program is Free Software
 
-Const VERSION = "0.15.2"
+Const VERSION = "0.16.1"
 
 ' Initialization
 Const DEVCON_SLEEP = 5
@@ -10,6 +10,8 @@ Const OVERDRIVENTOOL_FIXED_ARGS = " -consoleonly"
 Const HTTP_TIMEOUT = 2
 Const HTTP_ATTEMPTS = 3
 Const HASHRATE_HISTERESIS = 3
+Const MINER_RESTART_ATTEMPT_TIMEWINDOW = 300
+
 
 'Card Array Position
 Const P_CARD_NAME = 0
@@ -30,7 +32,7 @@ Const REG_KEY_PERSITENTDATA = "HKCU\Software\MinerGuardDog\"
 
 ' Timings
 Dim timeWaitStart, timeWaitReboot, timeWaitMinerStart, timeSleepCycle, timeoutMinerRestartReset
-Dim maxMinerRestartAttempts
+Dim maxMinerRestartAttempts, minerRestartAttempts
 
 'Ini File Variables
 Dim IniFile
@@ -48,6 +50,7 @@ Dim rig_identifier
 Dim pool_autoswitch
 Dim pool_autoswitch_time
 Dim flag_firststart
+Dim iMinerRestartAttempts
 
 Dim current_pool
 Dim current_pool_time_elapsed
@@ -167,6 +170,7 @@ Time_Start = Now
 miner_running = False
 ReadPersistentData
 bRestartMiner = False
+minerRestartCount = 0
 
 If Flag_cleanShutDown = False Then
 	Echo "Detected unclean shutdown or abnormal program termination", True
@@ -825,22 +829,42 @@ Sub startMiner()
 	
 	overdriventool_cmd = ""
 	
+	If timeElapsed(date_minerstarted) < MINER_RESTART_ATTEMPT_TIMEWINDOW Then
+		minerRestartAttempts = maxMinerRestartAttempts + 1
+	Else
+		minerRestartAttempts = 0
+	End If
+	
+	If minerRestartAttempts > maxMinerRestartAttempts Then
+		RebootSystem timeWaitReboot
+		Exit Sub
+	End If
+	
 	If isArray(cards) Then
 		'Restart Cards with Devcon
 		For n=0 To ubound(cards)			
 			c = split(cards(n),"|")			
-			Echo c(P_CARD_NAME) & ": Restarting", True
-			If sBool(c(P_CARD_RESTART))=True Then			
+			
+			If sBool(c(P_CARD_RESTART))=True Then							
 				pnpids = split(c(P_CARD_PNPID),",")
 				For i=0 To ubound(pnpids)
 					Echo "Disabling " & c(P_CARD_NAME) & ": " & pnpids(i), True	
-					gWshShell.Run devcon_dir & "\DEVCON.EXE disable """ & pnpids(i) & """", True
-					Sleep DEVCON_SLEEP * 2
-					Echo "Enabling " & c(P_CARD_NAME) & ": " & pnpids(i), True
-					gWshShell.Run devcon_dir & "\DEVCON.EXE enable """ & pnpids(i) & """", True
-					Echo "Waiting Devices to settle", False
-					Sleep DEVCON_SLEEP
+					gWshShell.Run devcon_dir & "\DEVCON.EXE disable """ & pnpids(i) & """", True										
 				Next
+				Sleep DEVCON_SLEEP * 2
+			End If
+		Next
+		
+		For n=0 To ubound(cards)			
+			c = split(cards(n),"|")						
+			If sBool(c(P_CARD_RESTART))=True Then			
+				pnpids = split(c(P_CARD_PNPID),",")
+				For i=0 To ubound(pnpids)				
+					Echo "Enabling " & c(P_CARD_NAME) & ": " & pnpids(i), True
+					gWshShell.Run devcon_dir & "\DEVCON.EXE enable """ & pnpids(i) & """", True					
+				Next
+				Echo "Waiting Devices to settle", False
+				Sleep DEVCON_SLEEP
 			End If
 		Next
 				
@@ -879,7 +903,7 @@ Sub startMiner()
 		gWshShell.Run miner_exe & " " & miner_args, 1, False
 	End If
 	gWshShell.CurrentDirectory = prevdir
-	Echo "Miner Started", True
+	Echo "Miner Started - Attempt " & minerRestartAttempts, True
 	Echo "Waiting " & timeWaitMinerStart & " seconds", False
 	Sleep timeWaitMinerStart
 	
