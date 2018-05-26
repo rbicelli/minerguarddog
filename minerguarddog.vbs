@@ -2,7 +2,7 @@
 ' (c) 2018 Riccardo Bicelli <r.bicelli@gmail.com>
 ' This Program is Free Software
 
-Const VERSION = "0.16.1"
+Const VERSION = "0.16.2"
 
 ' Initialization
 Const DEVCON_SLEEP = 5
@@ -830,7 +830,7 @@ Sub startMiner()
 	overdriventool_cmd = ""
 	
 	If timeElapsed(date_minerstarted) < MINER_RESTART_ATTEMPT_TIMEWINDOW Then
-		minerRestartAttempts = maxMinerRestartAttempts + 1
+		minerRestartAttempts = minerRestartAttempts + 1
 	Else
 		minerRestartAttempts = 0
 	End If
