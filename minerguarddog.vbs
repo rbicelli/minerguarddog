@@ -2,7 +2,7 @@
 ' (c) 2018 Riccardo Bicelli <r.bicelli@gmail.com>
 ' This Program is Free Software
 
-Const VERSION = "0.16.2"
+Const VERSION = "0.16.3"
 
 ' Initialization
 Const DEVCON_SLEEP = 5
@@ -849,7 +849,7 @@ Sub startMiner()
 				pnpids = split(c(P_CARD_PNPID),",")
 				For i=0 To ubound(pnpids)
 					Echo "Disabling " & c(P_CARD_NAME) & ": " & pnpids(i), True	
-					gWshShell.Run devcon_dir & "\DEVCON.EXE disable """ & pnpids(i) & """", True										
+					gWshShell.Run ShellPath(devcon_dir & "\DEVCON.EXE") & " disable """ & pnpids(i) & """", True										
 				Next
 				Sleep DEVCON_SLEEP * 2
 			End If
@@ -861,7 +861,7 @@ Sub startMiner()
 				pnpids = split(c(P_CARD_PNPID),",")
 				For i=0 To ubound(pnpids)				
 					Echo "Enabling " & c(P_CARD_NAME) & ": " & pnpids(i), True
-					gWshShell.Run devcon_dir & "\DEVCON.EXE enable """ & pnpids(i) & """", True					
+					gWshShell.Run ShellPath(devcon_dir & "\DEVCON.EXE") & " enable """ & pnpids(i) & """", True					
 				Next
 				Echo "Waiting Devices to settle", False
 				Sleep DEVCON_SLEEP
@@ -890,7 +890,7 @@ Sub startMiner()
 		If overdriventool_cmd<>"" Then
 			Echo "Applying Overdriventool Profiles", True
 			Echo "Executing Command " & overdriventool_dir & "OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, True
-			gWshshell.Run overdriventool_dir & "OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, True
+			gWshshell.Run shellPath(overdriventool_dir & "OVERDRIVENTOOL.EXE") & " " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, True
 		End If
 	
 	End If
@@ -964,7 +964,7 @@ Sub ApplyTimedOverdrivenTool()
 	If bProfile_applies Then	
 		Echo "Applying Stepping Overdriventool Profiles", True
 		Echo "Executing Command " & overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, True
-		gWshShell.Run overdriventool_dir & "\OVERDRIVENTOOL.EXE " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, 0, True
+		gWshShell.Run ShellPath(overdriventool_dir & "\OVERDRIVENTOOL.EXE") & " " & OVERDRIVENTOOL_FIXED_ARGS & " " & overdriventool_cmd, 0, True
 		Redim Preserve appliedTimedProfiles(ubound(appliedTimedProfiles)+1)
 		appliedTimedProfiles(ubound(appliedTimedProfiles)) = AppliedProfile
 	End If
@@ -1260,6 +1260,8 @@ function cardTemperatures(strjson,strName,cCount)
 				End If
 				If IsNumeric(Temp) Then 
 					Temp=cdbl(temp)
+				else
+					Temp=0
 				End If				
 			End If
 		End If
@@ -1273,7 +1275,7 @@ Sub checkOpenhardwaremonitor
 	For n=1 to 3		
 		If checkProcess("openhardwaremonitor.exe") = False Then
 			Echo "Starting Openhardwaremonitor", True
-			gWshShell.Run openhardwaremonitor_dir & "\openhardwaremonitor.exe",1,False
+			gWshShell.Run ShellPath(openhardwaremonitor_dir & "\openhardwaremonitor.exe"),1,False
 			Sleep 0.5
 		Else
 			Exit For
@@ -1464,3 +1466,10 @@ Sub SendPeriodicReport
 	End If
 End Sub
 
+Function ShellPath(sPath)
+	If instr(1, sPath, " ")>0 Then
+		ShellPath = """" & sPath & """"
+	Else
+		ShellPath = sPath
+	End If
+End Function
